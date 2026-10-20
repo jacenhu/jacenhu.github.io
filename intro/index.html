@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>SGLang KV Cache 系列图解 · 目录</title>
+<style>
+  :root{--bg:#0b1020;--panel:#121a2e;--line:#26314d;--text:#e6ebf5;--dim:#8a96b3;--gold:#facc15;--blue:#4f8cff}
+  *{box-sizing:border-box}
+  html,body{margin:0;background:#05070f;color:var(--text);
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif}
+  code,.mono{font-family:Menlo,Consolas,monospace}
+  main{max-width:1180px;margin:0 auto;padding:44px 32px 64px}
+  header h1{font-size:34px;margin:0 0 10px;letter-spacing:1px}
+  header p{margin:0;color:var(--dim);font-size:15px;line-height:1.8}
+  header p b{color:var(--text);font-weight:600}
+  .meta{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
+  .pill{font-size:12.5px;padding:4px 12px;border-radius:20px;background:var(--panel);border:1px solid var(--line);color:var(--dim)}
+  .pill b{color:var(--gold);font-weight:600}
+  section{margin-top:38px}
+  .stage{display:flex;align-items:baseline;gap:12px;margin-bottom:6px}
+  .stage .no{font-family:Menlo,monospace;font-size:13px;color:var(--blue);border:1px solid #2f4a86;border-radius:6px;padding:1px 8px}
+  .stage h2{font-size:20px;margin:0}
+  .goal{color:var(--dim);font-size:13.5px;margin:0 0 14px;line-height:1.7}
+  .goal b{color:var(--text);font-weight:500}
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+  .card{position:relative;display:block;text-decoration:none;color:inherit;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;padding:16px 18px 14px;transition:border-color .2s,box-shadow .2s,transform .2s}
+  a.card:hover{border-color:#7aa2ff;box-shadow:0 0 0 2px rgba(122,162,255,.25),0 8px 28px rgba(0,0,0,.35);transform:translateY(-2px)}
+  .card.plan{opacity:.55}
+  .ctop{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .order{min-width:30px;height:24px;border-radius:12px;padding:0 6px;background:#1b2440;border:1px solid #33416a;font-family:Menlo,monospace;font-size:12px;
+    display:flex;align-items:center;justify-content:center;color:#c7d2fe;flex:none}
+  .sno{font-family:Menlo,monospace;font-size:12px;color:var(--dim)}
+  .status{margin-left:auto;font-size:11.5px;padding:2px 9px;border-radius:10px;border:1px solid}
+  .status.ok{color:#86efac;border-color:#2f6b47;background:rgba(34,197,94,.08)}
+  .status.todo{color:var(--dim);border-color:#33416a}
+  .card h3{margin:0 0 6px;font-size:17px}
+  .card p{margin:0 0 10px;color:#b6c0d8;font-size:13.5px;line-height:1.65}
+  .tags{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px}
+  .tag{font-family:Menlo,monospace;font-size:11px;padding:1px 7px;border-radius:5px;background:#18223d;border:1px solid #2a3656;color:#c7d2fe}
+  .foot{display:flex;gap:14px;font-size:12px;color:var(--dim);border-top:1px dashed #26314d;padding-top:8px}
+  .foot .src{margin-left:auto;font-family:Menlo,monospace;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60%}
+  .how{margin-top:42px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 20px;font-size:13.5px;line-height:1.9;color:#b6c0d8}
+  .how b{color:var(--text)}
+  kbd{font-family:Menlo,monospace;font-size:11.5px;padding:1px 6px;border-radius:4px;border:1px solid #3b4a6e;background:#1b2440;color:#e6ebf5}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>SGLang KV Cache 系列图解</h1>
+    <p>面向新同学的上手路线：<b>先弄懂单机上一个 token 的 KV 怎么分配、缓存、淘汰</b>，再看并行怎么决定每张卡上 KV 的形状，
+       最后看 P/D 两边形状不同时 KV 怎么传过去。每篇图解用一个具体例子按步骤推进，每一步都标出对应源码位置。</p>
+    <div class="meta" id="meta"></div>
+  </header>
+
+  <div id="stages"></div>
+
+  <div class="how">
+    <b>查看方式</b>：点卡片打开图解；页面内 <kbd>空格</kbd> 自动演示 / 暂停，<kbd>←</kbd> <kbd>→</kbd> 上一步 / 下一步，
+    点进度条跳到任意一步，右下角「朗读」开启中文语音。左下角「目录」回到本页。<br>
+    <b>配合源码</b>：每一步右上角的 <code>file.py:行号</code> 相对于 <code>python/sglang/srt/</code>，按 <code>release_0.5.20_dev</code> 核对；
+    分支更新后行号可能偏移，以函数名为准。
+  </div>
+</main>
+
+<script>
+// 新增或更新一篇图解时只改这里。系列编号按出现顺序自动生成（= 建议阅读顺序），
+// 图解页面里的「系列 NN」要与这里一致。status：'ok' 已完成，'todo' 规划中。
+const STAGES = [
+  { no:'阶段 1', title:'单机 KV 生命周期',
+    goal:'看完能<b>不看代码画出 RadixCache、ReqToTokenPool、Allocator、KV Pool 四者的关系</b>，并说清生产配置下（page_size > 1、长 prompt、显存紧张）各自怎么变。',
+    items:[
+      { title:'一个请求的 KV Cache 之旅', dir:'kv_cache_intro', status:'ok', steps:20, dur:'2:35',
+        desc:'跟 3 个请求走一遍：前缀匹配、分配 slot、写入 KV、decode、交给 radix tree、复用前缀、淘汰。',
+        tags:['RadixCache','ReqToTokenPool','Allocator','KV Pool','lock_ref','LRU'],
+        src:'radix_cache.py · allocation.py · memory_pool.py' },
+      { title:'page_size > 1：按页分配', dir:'page_size_intro', status:'ok', steps:18, dur:'3:01',
+        desc:'按页分配 slot、前缀只能命中整页、最后一页没写满怎么处理。DCP 的虚拟页也建立在这个基础上。',
+        tags:['PagedTokenToKVPoolAllocator','页对齐','last_loc'],
+        src:'allocator/paged.py · allocation.py' },
+      { title:'分块 prefill', dir:'chunked_prefill_intro', status:'ok', steps:18, dur:'3:00',
+        desc:'长 prompt 分几块进来，每块算完先暂存进 radix tree 并加锁，下一块接着往后写。',
+        tags:['chunked_prefill_size','cache_unfinished_req'],
+        src:'radix_cache.py · scheduler.py' },
+      { title:'显存不够时：retract', dir:'retract_intro', status:'ok', steps:18, dur:'3:00',
+        desc:'淘汰腾不出空间时，正在 decode 的请求被撤回、KV 被释放、请求重新排队。',
+        tags:['check_decode_mem','retract_decode'],
+        src:'schedule_batch.py' },
+    ] },
+  { no:'阶段 2', title:'并行与 PD 传输',
+    goal:'看完能<b>给定一组并行配置，算出每卡 KV 的形状和容量</b>，并说出 P/D 配置不同时走哪条传输路径、每个 rank 发几份。',
+    items:[
+      { title:'并行如何切 KV', dir:'parallel_kv_intro', status:'ok', steps:19, dur:'3:14',
+        desc:'同一个模型在 TP、DP attention、PP、Prefill CP、DCP 下，每张卡存哪些 head、哪些层、哪些 token，能存多少。',
+        tags:['attn_tp','get_num_kv_heads','cell_size','DP attention','DCP'],
+        src:'model_config.py · pool_configurator.py · runtime_context.py' },
+      { title:'PD 传输：KV 按 head 切分', dir:'pd_head_slice_intro', status:'ok', steps:19, dur:'2:59',
+        desc:'P TP=2 → D TP=4：rank 怎么对应、按 head 切片算地址、RDMA 写入对端 slot，最后对比 MLA。',
+        tags:['_resolve_rank_mapping','send_kvcache_slice','GQA 复制','MLA'],
+        src:'disaggregation/common/conn.py · mooncake/conn.py' },
+      { title:'CP/DCP 下的 PD 传输', dir:'pd_cp_dcp_intro', status:'ok', steps:19, dur:'3:11',
+        desc:'P cp=2 → D dcp=4：只从 CP rank 0 取，按 pos % dcp 交错，打包成连续块再发；分块相位、前缀对齐、草稿 KV 三个边界。',
+        tags:['requires_dcp_relayout','build_dcp_token_transfer_plan','pack buffer'],
+        src:'disaggregation/common/utils.py · mooncake/conn.py' },
+      { title:'传输失败与 abort', dir:'pd_abort_intro', status:'ok', steps:19, dur:'3:13',
+        desc:'传到一半失败或请求被取消时，P、D 两边的 KV 由谁释放、按什么顺序释放。',
+        tags:['lifecycle','handle_inflight_transfer_failure'],
+        src:'disaggregation/mooncake/lifecycle.py · prefill.py' },
+    ] },
+  { no:'阶段 3', title:'按方向深入',
+    goal:'按手头工作选读：多级缓存、混合模型、投机解码、KV 量化。',
+    items:[
+      { title:'HiCache 三级缓存', dir:'hicache_intro', status:'ok', steps:18, dur:'3:16',
+        desc:'GPU → 主机内存 → 外部存储：什么时候写回、什么时候预取、命中后怎么加载回 GPU。',
+        tags:['HiRadixCache','pool_host','storage'],
+        src:'hiradix_cache.py · pool_host/ · storage/' },
+      { title:'混合模型的两套池', dir:'hybrid_pool_intro', status:'ok', steps:19, dur:'3:15',
+        desc:'SWA 只保留窗口内的 KV；Mamba state 每个请求一个 slot，和 KV pool 分开算预算。',
+        tags:['SWARadixCache','MambaPool','mamba ratio'],
+        src:'swa_radix_cache.py · mamba_radix_cache.py' },
+      { title:'投机解码的 KV', dir:'spec_decode_kv_intro', status:'ok', steps:19, dur:'3:20',
+        desc:'草稿 token 先占多个 slot，验证后把没被接受的那部分回收。',
+        tags:['alloc_for_spec_decode','EAGLE/MTP'],
+        src:'allocation.py' },
+      { title:'KV 量化', dir:'kv_quant_intro', status:'ok', steps:19, dur:'3:19',
+        desc:'FP8 / FP4 的 pool 布局、scale 存在哪里、会怎样改变容量计算。',
+        tags:['kv_cache_dtype','FP8','FP4','MXFP8'],
+        src:'kv_cache_dtype.py · memory_pool.py' },
+    ] },
+];
+
+const $ = id => document.getElementById(id);
+const all = STAGES.flatMap(st=>st.items);
+const done = all.filter(s=>s.status==='ok');
+$('meta').innerHTML =
+  `<span class="pill">已完成 <b>${done.length}</b> / ${all.length} 篇</span>`+
+  `<span class="pill">每篇约 <b>3 分钟</b></span>`+
+  `<span class="pill">源码基线 <b>release_0.5.20_dev</b></span>`;
+
+let n = 0;
+$('stages').innerHTML = STAGES.map(st=>{
+  const cards = st.items.map(s=>{
+    const no = String(++n).padStart(2,'0'), ok = s.status==='ok';
+    const inner = `
+      <div class="ctop"><span class="order">${no}</span><span class="sno">系列</span>
+        <span class="status ${ok?'ok':'todo'}">${ok?'可查看':'规划中'}</span></div>
+      <h3>${s.title}</h3>
+      <p>${s.desc}</p>
+      <div class="tags">${s.tags.map(t=>`<span class="tag">${t}</span>`).join('')}</div>
+      <div class="foot">${ok?`<span>${s.steps} 步</span><span>约 ${s.dur}</span>`:'<span>—</span>'}<span class="src">${s.src}</span></div>`;
+    return ok ? `<a class="card" href="${s.dir}/index.html">${inner}</a>` : `<div class="card plan">${inner}</div>`;
+  }).join('');
+  return `<section><div class="stage"><span class="no">${st.no}</span><h2>${st.title}</h2></div>
+          <p class="goal">${st.goal}</p><div class="grid">${cards}</div></section>`;
+}).join('');
+</script>
+</body>
+</html>

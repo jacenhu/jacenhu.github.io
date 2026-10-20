@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>page_size > 1：按页分配 · SGLang KV Cache 系列 02</title>
+<style>
+  :root{--bg:#0b1020;--panel:#121a2e;--line:#26314d;--text:#e6ebf5;--dim:#8a96b3;
+        --A:#4f8cff;--B:#22c55e;--C:#f59e0b;--gold:#facc15;--red:#ef4444}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#05070f;color:var(--text);
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;overflow:hidden}
+  code,.mono{font-family:Menlo,Consolas,monospace}
+  #wrap{position:absolute;left:50%;top:50%;width:1280px;height:780px;transform-origin:center center}
+  #stage{position:relative;width:1280px;height:720px;background:var(--bg);border-radius:14px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+  #top{position:absolute;left:24px;right:24px;top:16px;height:44px;display:flex;align-items:center;justify-content:space-between}
+  #stitle{font-size:24px;font-weight:700;letter-spacing:.5px}
+  #stitle .no{color:var(--dim);font-weight:500;margin-right:10px;font-size:18px}
+  #code{font-family:Menlo,Consolas,monospace;font-size:14px;color:#c7d2fe;background:#1e2a4a;border:1px solid #334373;padding:6px 12px;border-radius:8px}
+  #code:empty{opacity:0}
+  /* request strip */
+  #req{position:absolute;left:24px;right:24px;top:70px;height:74px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 16px;transition:box-shadow .3s,border-color .3s}
+  .plabel{font-size:13px;color:var(--dim);margin-bottom:7px;display:flex;justify-content:space-between}
+  .plabel b{color:var(--text);font-weight:600}
+  .plabel .m{color:var(--gold)}
+  #chips{display:flex;gap:0;flex-wrap:nowrap}
+  .pgroup{display:flex;gap:4px;padding:0 6px;border-right:2px dotted #3b4a6e}
+  .pgroup:last-child{border-right:none}
+  .pgroup:first-child{padding-left:0}
+  .chip{font-family:Menlo,monospace;font-size:12.5px;padding:5px 7px;border-radius:7px;border:1.5px solid var(--line);background:#0f1628;transition:all .4s;animation:pop .35s ease-out}
+  .chip.pending{color:var(--dim)}
+  .chip.miss{border-color:#64748b;color:#cbd5e1}
+  .chip.hit{border-color:var(--gold);color:var(--gold);background:rgba(250,204,21,.12)}
+  .chip.lost{border-color:var(--red);color:#fca5a5;background:rgba(239,68,68,.1)}
+  .chip.done{border-color:var(--c);background:color-mix(in srgb,var(--c) 22%,transparent);color:#fff}
+  .chip.out{border-style:dashed;border-color:var(--c);color:var(--c)}
+  @keyframes pop{from{transform:scale(.6);opacity:0}to{transform:scale(1);opacity:1}}
+  /* panels */
+  .panel{position:absolute;top:154px;height:440px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;transition:box-shadow .3s,border-color .3s}
+  .panel h3{margin:0 0 2px;font-size:16px}
+  .panel .sub{font-size:12px;color:var(--dim);margin-bottom:8px}
+  .focus{border-color:#7aa2ff!important;box-shadow:0 0 0 2px rgba(122,162,255,.35),0 0 28px rgba(122,162,255,.25)}
+  #ptree{left:24px;width:388px}
+  #prow{left:424px;width:426px}
+  #pkv{left:862px;width:394px}
+  /* tree */
+  #tree{display:flex;justify-content:center;padding-top:4px}
+  .tnode{display:flex;flex-direction:column;align-items:center}
+  .node{background:#0f1628;border:1.5px solid #3b4a6e;border-radius:9px;padding:5px 7px;transition:all .4s;text-align:center}
+  .node.fresh{animation:pop .5s ease-out}
+  .node.hit{border-color:var(--gold);box-shadow:0 0 16px rgba(250,204,21,.35)}
+  .node.split{border-color:#a78bfa;box-shadow:0 0 16px rgba(167,139,250,.4)}
+  .ntitle{font-size:13px;color:var(--dim);padding:2px 10px}
+  .npage{display:flex;gap:2px;justify-content:center;padding:2px 3px;border:1px dashed #475569;border-radius:5px}
+  .tk{font-family:Menlo,monospace;font-size:10px;padding:1px 3px;border-radius:3px;background:color-mix(in srgb,var(--c) 30%,transparent);border:1px solid var(--c)}
+  .nmeta{font-family:Menlo,monospace;font-size:10px;color:var(--dim);margin-top:3px}
+  .nmeta .lock{color:var(--gold)}
+  .kids{display:flex;justify-content:center;position:relative;padding-top:12px}
+  .kids::before{content:'';position:absolute;top:0;left:50%;height:12px;border-left:2px solid #475569}
+  .kid{position:relative;padding:12px 4px 0}
+  .kid::before,.kid::after{content:'';position:absolute;top:0;width:50%;height:12px;border-top:2px solid #475569}
+  .kid::before{right:50%}
+  .kid::after{left:50%;border-left:2px solid #475569}
+  .kid:only-child::before{display:none}
+  .kid:only-child::after{border-top:none}
+  .kid:first-child::before{border-top:none}
+  .kid:last-child::after{border-top:none;border-left:none}
+  .kid:last-child::before{border-right:2px solid #475569}
+  .kid:only-child::after{border-left:2px solid #475569}
+  /* rows */
+  .row{display:flex;align-items:center;gap:8px;margin-bottom:8px;transition:opacity .5s;animation:pop .4s ease-out}
+  .row.released{opacity:.25}
+  .rlab{width:66px;flex:none;font-size:12px;line-height:1.3}
+  .rlab .idx{font-family:Menlo,monospace;color:var(--dim)}
+  .cells{display:flex;flex-wrap:wrap;gap:6px}
+  .cg{display:flex;gap:2px;padding:2px;border:1px dashed #3b4a6e;border-radius:5px}
+  .cell{width:21px;height:22px;border-radius:4px;font-family:Menlo,monospace;font-size:10px;display:flex;align-items:center;justify-content:center;
+    background:color-mix(in srgb,var(--c) 35%,transparent);border:1px solid var(--c);animation:pop .35s ease-out}
+  .cell.shared{border:1.5px solid var(--gold)}
+  .rowempty{font-size:12px;color:var(--dim);font-style:italic}
+  #calc{margin-top:10px;border-top:1px dashed #2a3656;padding-top:8px;font-family:Menlo,Consolas,monospace;font-size:12px;line-height:1.58;white-space:pre;color:#dbe4ff;animation:fadein .45s ease-out}
+  #calc .c{color:var(--dim)}
+  #calc .y{color:var(--gold)}
+  #calc .g{color:#86efac}
+  #calc .r{color:#fca5a5}
+  .mini{display:inline-flex;gap:1px;vertical-align:middle;margin:0 2px}
+  .mini i{display:inline-block;width:13px;height:13px;border-radius:2px;border:1px solid #3b4a6e;font-style:normal}
+  .mini i.u{background:color-mix(in srgb,var(--C) 55%,transparent);border-color:var(--C)}
+  .mini i.n{background:color-mix(in srgb,#a78bfa 55%,transparent);border-color:#a78bfa}
+  /* kv grid */
+  .prow2{display:flex;align-items:center;gap:6px;margin-bottom:5px}
+  .plab{width:44px;font-family:Menlo,monospace;font-size:11px;color:var(--dim);text-align:right}
+  .pbox{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;flex:1;padding:3px;border-radius:8px;border:1.5px solid #26314d;transition:all .4s}
+  .pbox.reserved{opacity:.35;border-style:dashed}
+  .pbox.freeing{border-color:var(--red);animation:blink .6s ease-in-out infinite alternate}
+  .pbox.newpage{border-color:#a78bfa;box-shadow:0 0 14px rgba(167,139,250,.45)}
+  @keyframes blink{from{box-shadow:0 0 0 rgba(239,68,68,0)}to{box-shadow:0 0 18px rgba(239,68,68,.7)}}
+  .slot{height:37px;border-radius:6px;border:1.5px solid #2c3858;background:#0c1222;position:relative;transition:all .45s}
+  .slot .i{position:absolute;left:4px;top:2px;font-family:Menlo,monospace;font-size:9.5px;color:var(--dim)}
+  .slot .t{position:absolute;left:0;right:0;bottom:4px;text-align:center;font-family:Menlo,monospace;font-size:10px}
+  .slot.alloc{border:2px dashed var(--c);background:color-mix(in srgb,var(--c) 10%,transparent)}
+  .slot.kv{border:2px solid var(--c);background:color-mix(in srgb,var(--c) 45%,transparent)}
+  .slot.tree{border:2px solid var(--gold);background:color-mix(in srgb,var(--c) 45%,transparent)}
+  #freebox{margin-top:8px;font-size:13px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  #freebox .fp{font-family:Menlo,monospace;font-size:12px;padding:1px 8px;border-radius:5px;border:1px solid #33416a;background:#18223d;animation:pop .35s ease-out}
+  #freebox .none{color:var(--red);font-size:12px}
+  #avail{font-size:12px;color:var(--dim);margin-top:4px}
+  #avail b{color:var(--text)}
+  #outloc{margin-top:6px;font-family:Menlo,monospace;font-size:12px;color:#c7d2fe;min-height:16px}
+  /* caption */
+  #cap{position:absolute;left:24px;right:24px;top:604px;height:102px;display:flex;align-items:center;justify-content:center;text-align:center;font-size:20px;line-height:1.55;padding:0 30px;
+    background:linear-gradient(180deg,rgba(18,26,46,.9),rgba(18,26,46,.6));border:1px solid var(--line);border-radius:12px}
+  #cap span{animation:fadein .5s ease-out}
+  #cap em{font-style:normal;color:var(--gold)}
+  #cap code{font-size:17px;color:#c7d2fe}
+  @keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  /* overlay */
+  #ov{position:absolute;inset:0;background:radial-gradient(ellipse at center,#16224a 0%,#0b1020 70%);display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .6s;z-index:10}
+  #ov.hide{opacity:0;pointer-events:none}
+  #ov h1{font-size:50px;margin:0 0 14px;letter-spacing:2px}
+  #ov h2{font-size:22px;font-weight:400;color:var(--dim);margin:0 0 34px}
+  #ov .big{font-size:18px;padding:12px 30px;border-radius:30px;background:#4f8cff;color:#fff;border:none;cursor:pointer}
+  #ov .sum{font-size:20px;line-height:1.9;text-align:left}
+  #ov .sum b{color:var(--gold)}
+  #ov .path{margin-top:22px;font-family:Menlo,monospace;font-size:15px;color:#c7d2fe;background:#121a2e;border:1px solid var(--line);padding:14px 22px;border-radius:10px;line-height:1.9;white-space:pre}
+  /* controls */
+  #ctrl{position:absolute;left:0;right:0;top:732px;height:44px;display:flex;align-items:center;gap:12px;padding:0 6px}
+  #ctrl button{background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;min-width:40px;font-size:15px;cursor:pointer;padding:0 10px}
+  #ctrl button:hover{background:#26325a}
+  #ctrl a.home{display:flex;align-items:center;background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;padding:0 10px;font-size:13px;text-decoration:none;white-space:nowrap}
+  #ctrl a.home:hover{background:#26325a}
+  #bar{flex:1;display:flex;gap:3px;height:10px;cursor:pointer}
+  #bar div{flex:1;background:#232d4b;border-radius:3px;position:relative;overflow:hidden}
+  #bar div.done{background:#4f8cff}
+  #bar div.cur::after{content:'';position:absolute;left:0;top:0;bottom:0;background:#4f8cff;animation:fill var(--d) linear forwards}
+  #bar div.cur.paused::after{animation-play-state:paused}
+  @keyframes fill{from{width:0}to{width:100%}}
+  #time{font-size:13px;color:var(--dim);width:64px;text-align:right}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <div id="top"><div id="stitle"></div><div id="code"></div></div>
+
+    <div id="req">
+      <div class="plabel"><span><b>当前请求</b>&nbsp; <span id="reqname"></span></span><span id="match" class="m"></span></div>
+      <div id="chips"></div>
+    </div>
+
+    <div class="panel" id="ptree">
+      <h3>① RadixCache</h3><div class="sub">节点只存整页；虚线框 = 一页 4 个 token</div>
+      <div id="tree"></div>
+    </div>
+
+    <div class="panel" id="prow">
+      <h3>② ReqToTokenPool + 分配计算</h3><div class="sub">第 i 个 token → slot；slot = 页号 × 4 + 页内偏移</div>
+      <div id="rows"></div>
+      <div id="calc"></div>
+    </div>
+
+    <div class="panel" id="pkv">
+      <h3>③ Allocator + ④ KV Pool</h3><div class="sub">page_size = 4，24 个 slot = 6 页；Allocator 只管空闲页号</div>
+      <div id="grid"></div>
+      <div id="outloc"></div>
+      <div id="freebox"></div>
+      <div id="avail"></div>
+    </div>
+
+    <div id="cap"></div>
+    <div id="ov"></div>
+  </div>
+
+  <div id="ctrl">
+    <a class="home" href="../index.html" title="返回目录">☰ 目录</a>
+    <button id="bprev" title="上一步 (←)">⏮</button>
+    <button id="bplay" title="自动演示/暂停 (空格)">▶</button>
+    <button id="bnext" title="下一步 (→)">⏭</button>
+    <div id="bar"></div>
+    <div id="time"></div>
+    <button id="bvoice" title="中文语音朗读">🔇 朗读</button>
+  </div>
+</div>
+
+<script>
+const COLORS = {A:'#4f8cff', B:'#22c55e', C:'#f59e0b'};
+const PS = 4, NP = 6;
+const A_PROMPT = ['<s>','You','are','a','help','AI','Q1','is','what','?'];
+const B_PROMPT = ['<s>','You','are','a','help','AI','Q2','why','?'];
+
+let S;
+function init(){
+  S = {
+    slots: Array.from({length:NP*PS}, ()=>({owner:null, st:'free', tok:''})),
+    free: [1,2,3,4,5],          // PagedTokenToKVPoolAllocator.clear()：页 0 保留
+    rows: [], tree:{id:'root', toks:[], pages:[], lock:0, children:[]},
+    req:null, v:{}, overlay:null,
+  };
+  clearTransient();
+}
+function clearTransient(){
+  S.focus=[]; S.outLoc=null; S.match=''; S.calc=''; S.pageMark={};
+  walk(S.tree, n=>{ n.fresh=false; n.hit=false; n.split=false; });
+}
+function walk(n,f){ f(n); n.children.forEach(c=>walk(c,f)); }
+const pageOf = s => Math.floor(s / PS);
+function takePages(n){ return S.free.splice(0, n); }
+function setSlots(slots, owner, toks, st){ slots.forEach((s,i)=>{ S.slots[s] = {owner, st, tok:toks[i]}; }); }
+function freePage(p){ for(let k=0;k<PS;k++) S.slots[p*PS+k] = {owner:null, st:'free', tok:''}; S.free.unshift(p); }
+function chip(t, cls, owner){ return {t, cls, owner}; }
+function treeSlots(n){ return n.pages.flatMap(p=>[0,1,2,3].map(k=>p*PS+k)); }
+
+const steps = [
+ { title:'', code:'', dur:5000,
+   cap:'生产环境的 page_size 通常是 16、32 甚至更大。KV 改成<em>按页分配</em>后，分配、前缀匹配、释放各变成什么样？',
+   act(){ S.overlay='title'; } },
+
+ { title:'按页管理', code:'allocator/paged.py:337  clear', dur:9000,
+   cap:'page_size = 4：24 个 slot 分成 6 页，slot = <em>页号 × 4 + 页内偏移</em>。Allocator 只记空闲的页号，<em>页 0 保留</em>不分配。',
+   act(){ S.calc=`<span class="c"># PagedTokenToKVPoolAllocator</span>
+num_pages  = size // page_size = 24 // 4 = <span class="y">6</span>
+free_pages = arange(1, num_pages)  = <span class="y">[1, 2, 3, 4, 5]</span>
+<span class="c"># 页 0 留给 padding token 写 dummy 输出</span>`;
+     S.focus=['pkv']; } },
+
+ { title:'请求 A 到达', code:'radix_cache.py:440  key.page_aligned', dur:7500,
+   cap:'A 有 10 个 token，按页分成 <em>4 + 4 + 2</em>。查前缀时 key 先截到整页长度（8），树是空的，没有命中。',
+   act(){ S.req={name:'A', chips:A_PROMPT.map(t=>chip(t,'miss','A'))}; S.match='命中 0 / 10';
+     S.calc=`<span class="c"># match_prefix 先把 key 截到整页</span>
+key.page_aligned(4)：len 10 → <span class="y">8</span>
+树为空 → prefix_len = <span class="y">0</span>`;
+     S.focus=['req','ptree']; } },
+
+ { title:'分配：一次给整页', code:'utils/common.py:4590  get_num_new_pages', dur:10000,
+   cap:'10 个 token 要 <em>ceil(10 / 4) = 3 页</em>。拿走空闲页 1、2、3：前两页填满，<em>第 3 页只用 2 个 slot</em>，另外 2 个先空着。',
+   act(){ const pg = takePages(3); const slots = [...Array(10).keys()].map(i=>pg[Math.floor(i/4)]*PS + i%4);
+     setSlots(slots,'A',A_PROMPT,'alloc'); S.v.A = slots; S.v.Apages = pg;
+     S.rows.push({idx:0, req:'A', cells:slots.map(s=>({slot:s}))}); S.outLoc = slots; pg.forEach(p=>S.pageMark[p]='newpage');
+     S.calc=`num_new_pages = ceil(10/4) − ceil(0/4) = <span class="y">3</span>
+<span class="c"># alloc_extend 的三段（paged.py:76）</span>
+num1 = 填满 prefix 所在的半页   = 0
+num2 = 整页部分 floor(10/4)×4  = <span class="y">8</span>  → 页 1、2
+num3 = 最后不满的一页          = <span class="y">2</span>  → 页 3`;
+     S.focus=['pkv','prow']; } },
+
+ { title:'淘汰时多留一页', code:'allocation.py:190  alloc_paged_token_slots_extend', dur:9000,
+   cap:'分配前先估算要腾多少空间：除了 10 个 token，<em>每个请求再多算一整页</em>，保证最后那页不满时也一定放得下。',
+   act(){ S.calc=`<span class="c"># 过估：假设每个请求都要再开一页</span>
+num_tokens = extend_num_tokens + bs × page_size
+           = 10 + 1 × 4 = <span class="y">14</span>
+evict_from_tree_cache(tree_cache, 14)
+<span class="c"># 空闲 5 页 = 20 slot ≥ 14，不用淘汰</span>`;
+     S.focus=['prow']; } },
+
+ { title:'Prefill：写入 KV', code:'memory_pool.py:1909  set_kv_buffer', dur:7500,
+   cap:'前向时按 <code>out_cache_loc</code> 写入 10 个 slot，采样出 A1。<em>页 3 的 slot 14、15 还空着</em>，留给后面的 token。',
+   act(){ setSlots(S.v.A,'A',A_PROMPT,'kv'); S.req.chips.forEach(c=>c.cls='done'); S.req.chips.push(chip('A1','out','A'));
+     S.outLoc = S.v.A; S.focus=['pkv']; } },
+
+ { title:'Decode：先用完当前页', code:'allocation.py:606  last_loc', dur:10000,
+   cap:'decode 时看上一个 token 的 slot（<em>last_loc = 13</em>）。页 3 还没写满，A1、A2 依次写到 <em>slot 14、15</em>，不分配新页。',
+   act(){ setSlots([14,15],'A',['A1','A2'],'kv'); S.v.A.push(14,15); S.rows[0].cells.push({slot:14},{slot:15});
+     S.req.chips[10].cls='done'; S.req.chips.push(chip('A2','done','A'), chip('A3','out','A'));
+     S.outLoc=[14,15];
+     S.calc=`<span class="c"># alloc_decode：同一页内往后写</span>
+last_loc = req_to_token[A, seq_len − 1]
+A1：last_loc 13 → <span class="y">14</span>    seq_len 11
+A2：last_loc 14 → <span class="y">15</span>    seq_len 12
+<span class="c"># 页 3 写满了</span>`;
+     S.focus=['pkv','prow']; } },
+
+ { title:'Decode：跨页才拿新页', code:'utils/common.py:4606  seq_lens % page_size == 1', dur:10000,
+   cap:'A3 是第 13 个 token，<em>13 % 4 == 1</em>，说明要进入新的一页。从空闲列表拿走页 4，A3 写到 <em>slot 16</em>。',
+   act(){ const p = takePages(1)[0]; setSlots([p*PS],'A',['A3'],'kv'); S.v.A.push(p*PS); S.rows[0].cells.push({slot:p*PS});
+     S.req.chips[12].cls='done'; S.req.chips.push(chip('</s>','out','A')); S.outLoc=[p*PS]; S.pageMark[p]='newpage';
+     S.calc=`<span class="c"># decode 时只有一种情况要新页</span>
+num_new_pages = sum(seq_len % 4 == 1)
+seq_len 13：13 % 4 = <span class="y">1</span> → 新页 <span class="y">${p}</span>
+out_cache_loc = ${p} × 4 + 0 = <span class="y">${p*PS}</span>`;
+     S.focus=['pkv','prow']; } },
+
+ { title:'A 结束：只有整页进树', code:'radix_cache.py:528 / 553  cache_finished_req', dur:12000,
+   cap:'13 个 token 只把<em>前 12 个（3 整页）</em>插进树，并在 prompt 边界 8 处拆成两个节点。第 13 个 token 那页<em>整页释放</em>。',
+   act(){ const all = [...A_PROMPT,'A1','A2'];
+     S.tree.children.push({id:'n1', owner:'A', toks:all.slice(0,8), pages:[1,2], lock:0, t:1, fresh:true,
+       children:[{id:'n2', owner:'A', toks:all.slice(8,12), pages:[3], lock:0, t:1, fresh:true, children:[]}]});
+     S.v.A.slice(0,12).forEach(s=>S.slots[s].st='tree');
+     freePage(4); S.pageMark[4]='freeing'; S.rows[0].released=true;
+     S.calc=`key 13 → page_aligned(4) = <span class="y">12</span>   → 插入页 1、2、3
+prompt_key 10 → 8，0 < 8 < 12 → <span class="y">在 8 处拆开</span>
+<span class="c"># LRU 能先丢输出那页，保住可复用的 prompt</span>
+尾部 kv_indices[12:] = [16] → <span class="r">释放页 4</span>`;
+     S.focus=['ptree','pkv']; } },
+
+ { title:'请求 B：前缀只能按页命中', code:'radix_cache.py:220  match_at', dur:11000,
+   cap:'B 和 A 有 <em>6 个 token 相同</em>，但匹配结果<em>向下取整到页</em>：只命中 4 个。help、AI 两个 token 要重新算。',
+   act(){ S.rows=S.rows.filter(r=>!r.released);
+     S.req={name:'B', chips:B_PROMPT.map((t,i)=>chip(t, i<4?'hit':i<6?'lost':'miss','B'))};
+     S.match='相同 6 个 → 命中 4 / 9';
+     S.tree.children[0].hit=true;
+     S.calc=`<span class="c"># match_at：逐 token 比较后按页向下取整</span>
+matched_tokens = <span class="y">6</span>   (&lt;s&gt; You are a help AI)
+return (6 // 4) × 4 = <span class="y">4</span>
+<span class="r">help、AI 虽然一样，也要重算</span>`;
+     S.focus=['req','ptree']; } },
+
+ { title:'节点只在页边界拆', code:'radix_cache.py:750  _split_node', dur:10000,
+   cap:'命中点 4 落在节点中间，节点在<em>页边界</em>拆成两段。子节点用自己<em>第一页的 4 个 token</em> 做查找键。',
+   act(){ const n1 = S.tree.children[0];
+     const sh = {id:'sh', owner:'A', toks:n1.toks.slice(0,4), pages:[1], lock:0, t:2, split:true, children:[]};
+     n1.toks = n1.toks.slice(4); n1.pages=[2]; n1.split=true; sh.children.push(n1); S.tree.children=[sh];
+     S.calc=`<span class="c"># _split_node(key, child, split_len = 4)</span>
+新父节点：页 1  [&lt;s&gt; You are a]
+原子节点：页 2  [help AI Q1 is] → 页 3
+<span class="c"># child_key(page_size)：一页 token 组成的 tuple</span>
+children[(help, AI, Q1, is)] = 页 2 的节点`;
+     S.focus=['ptree']; } },
+
+ { title:'B 分配：从新页开始', code:'allocator/paged.py:76  num1 / num2 / num3', dur:11000,
+   cap:'B 的前缀正好 4 个，<em>落在页边界</em>，不用补半页。剩下 5 个 token 要 2 页：页 4 填满，页 5 只用 1 个。<em>空闲页用完了</em>。',
+   act(){ const sh=S.tree.children[0]; sh.lock=1; sh.hit=true;
+     const pg = takePages(2); const toks = B_PROMPT.slice(4); const slots = toks.map((_,i)=>pg[Math.floor(i/4)]*PS + i%4);
+     setSlots(slots,'B',toks,'kv'); S.v.B = [4,5,6,7, ...slots];
+     S.rows.push({idx:0, req:'B', cells:[4,5,6,7].map(s=>({slot:s, shared:true})).concat(slots.map(s=>({slot:s})))});
+     S.req.chips.forEach((c,i)=>{ if(i>=4) c.cls='done'; }); S.req.chips.push(chip('B1','out','B'));
+     S.outLoc = slots; pg.forEach(p=>S.pageMark[p]='newpage'); S.match='命中 4 / 9';
+     S.calc=`prefix_len 4，last_loc 7，seq_len 9
+num1 = min(9, ceil(4)) − 4      = <span class="y">0</span>  <span class="c"># 已在页边界</span>
+num2 = floor(9) − ceil(4) = 8 − 4 = <span class="y">4</span>  → 页 ${pg[0]}
+num3 = 9 − 8                    = <span class="y">1</span>  → 页 ${pg[1]}
+inc_lock_ref(页 1 节点)`;
+     S.focus=['pkv','prow']; } },
+
+ { title:'前缀不在页边界时', code:'radix_cache.py:623  prefix_indices', dur:12500,
+   cap:'另一个例子：分块 prefill 的中间块可能停在<em>页的中间</em>。下一块先把<em>那页剩下的 slot 填满</em>，再拿新页。',
+   act(){ S.calc=`<span class="c"># 请求 C：14 token，chunked_prefill_size = 6</span>
+块 1：6 // 4 × 4 = 4 → [0, 4)  <span class="c">首块对齐到页 policy:1523</span>
+块 2：min(10, 6)  = 6 → [4, 10) <span class="c">续块不对齐 policy:1169</span>
+  树里只放整页 8 个，后 2 个留在 prefix_indices
+  <span class="mini"><i class="u"></i><i class="u"></i><i class="u"></i><i class="u"></i></span><span class="mini"><i class="u"></i><i class="u"></i><i class="u"></i><i class="u"></i></span><span class="mini"><i class="u"></i><i class="u"></i><i></i><i></i></span>
+块 3：prefix 10，last_loc 13
+  num1 = 12 − 10 = <span class="y">2</span> → 先填 slot 14、15
+  num3 = 14 − 12 = <span class="y">2</span> → 新页的 slot 16、17
+  <span class="mini"><i class="u"></i><i class="u"></i><i class="u"></i><i class="u"></i></span><span class="mini"><i class="u"></i><i class="u"></i><i class="u"></i><i class="u"></i></span><span class="mini"><i class="u"></i><i class="u"></i><i class="n"></i><i class="n"></i></span><span class="mini"><i class="n"></i><i class="n"></i><i></i><i></i></span>`;
+     S.focus=['prow']; } },
+
+ { title:'B 结束：释放按页', code:'allocator/paged.py:282  free_segment', dur:11500,
+   cap:'B 生成 B1 后结束。前 8 个 token 作为<em>页 4 的新子节点</em>进树，尾部 2 个 token 所在的页 5 <em>整页还回空闲列表</em>。',
+   act(){ setSlots([21],'B',['B1'],'kv'); S.v.B.push(21);
+     const sh=S.tree.children[0]; sh.lock=0;
+     sh.children.push({id:'nB', owner:'B', toks:B_PROMPT.slice(4,8), pages:[4], lock:0, t:3, fresh:true, children:[]});
+     [16,17,18,19].forEach(s=>S.slots[s].st='tree');
+     freePage(5); S.pageMark[5]='freeing'; S.rows[0].released=true;
+     S.req.chips[9].cls='done'; S.req.chips.push(chip('</s>','out','B'));
+     S.calc=`B1：last_loc 20 → 21，seq_len 10 % 4 = 2，不用新页
+key 10 → page_aligned = <span class="y">8</span>
+  页 1 已在树中，页 4 [help AI Q2 why] → 新子节点
+尾部 [20, 21] → free_segment
+  reps = free_index[::4] = [20] → 页 <span class="r">5</span>
+<span class="c"># 普通 free()：unique(slot // 4) 后再还</span>`;
+     S.focus=['ptree','pkv']; } },
+
+ { title:'代价：浪费半页、少命中', code:'', dur:11000,
+   cap:'按页分配有两个代价：每个请求<em>最后一页平均浪费约半页</em>；前缀命中<em>最多少 page_size − 1 个 token</em>。',
+   act(){ S.calc=`<span class="c"># 本例：B 运行时页 5 只用了 slot 20、21，空着 2 个</span>
+            page 4      page 16     page 64
+尾页浪费    ≤ 3 slot    ≤ 15        ≤ 63
+前缀少命中  ≤ 3 token   ≤ 15        ≤ 63
+
+B：相同 6 个，命中 4，<span class="r">少 2 个</span>
+<span class="c"># 请求越短、page 越大，比例越高</span>`;
+     S.focus=['pkv','prow']; } },
+
+ { title:'好处：一切按页搬运', code:'disaggregation/mooncake/conn.py:1054  send_kvcache', dur:10500,
+   cap:'换来的是：分配和释放按页操作，attention kernel 读<em>页表</em>，PD 传输和 HiCache 也能<em>按页整块拷贝</em>。',
+   act(){ S.calc=`<span class="c"># 页是很多模块共用的最小单位</span>
+Allocator    free_pages 长度 ÷ page_size
+Attention    FlashInfer / FA3 的 page table
+PD 传输      send_kvcache 按页算地址（系列 06）
+HiCache      host pool / 外部存储按页存（系列 09）
+<span class="c"># page 太小：操作次数多；太大：浪费多</span>`;
+     S.focus=['prow']; } },
+
+ { title:'DCP 的虚拟页', code:'allocation.py:333  _alloc_page_size', dur:10000,
+   cap:'开 DCP 时，Allocator 的页大小变成 <em>page_size × dcp</em>。系列 07 里 D 侧的「虚拟页」就是这同一套按页分配。',
+   act(){ S.calc=`<span class="c"># _alloc_page_size(batch)</span>
+if dcp_enabled:
+    return allocator.page_size     <span class="c"># = page × dcp</span>
+return tree_cache.page_size
+
+page 4，dcp 4 → 虚拟页 <span class="y">16</span> token
+每张卡在一页里只存其中 4 个（pos % 4 == rank）`;
+     S.focus=['pkv']; } },
+
+ { title:'', code:'', dur:13000,
+   cap:'把 page_size 设成 4 或 16，在这 5 个位置打断点，看 out_cache_loc 和 free_pages 怎么变。',
+   act(){ S.overlay='summary'; } },
+];
+
+/* ---------------- render ---------------- */
+const $ = id => document.getElementById(id);
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function nodeHTML(n){
+  if(n.id==='root') return `<div class="tnode"><div class="node"><div class="ntitle">root</div></div>${n.children.length?kidsHTML(n.children):''}</div>`;
+  const cls = 'node'+(n.fresh?' fresh':'')+(n.hit?' hit':'')+(n.split?' split':'');
+  const pages = n.pages.map((p,k)=>`<div class="npage">${n.toks.slice(k*PS,k*PS+PS).map(t=>`<span class="tk" style="--c:${COLORS[n.owner]}">${esc(t)}</span>`).join('')}</div>`).join('');
+  const lock = n.lock ? `<span class="lock">🔒 ${n.lock}</span>` : 'lock 0';
+  return `<div class="tnode"><div class="${cls}"><div style="display:flex;flex-direction:column;gap:2px">${pages}</div>
+    <div class="nmeta">页 [${n.pages.join(',')}] · ${lock} · t=${n.t}</div></div>${n.children.length?kidsHTML(n.children):''}</div>`;
+}
+function kidsHTML(cs){ return `<div class="kids">${cs.map(c=>`<div class="kid">${nodeHTML(c)}</div>`).join('')}</div>`; }
+
+function rowsHTML(){
+  if(!S.rows.length) return '<span class="rowempty">（没有运行中的请求）</span>';
+  return S.rows.map(r=>{
+    const groups=[]; r.cells.forEach(c=>{ const p=pageOf(c.slot); const g=groups[groups.length-1];
+      if(g && g.p===p) g.cells.push(c); else groups.push({p, cells:[c]}); });
+    const html = groups.map(g=>`<div class="cg">${g.cells.map(c=>`<div class="cell${c.shared?' shared':''}" style="--c:${COLORS[S.slots[c.slot].owner]||COLORS[r.req]}">${c.slot}</div>`).join('')}</div>`).join('');
+    return `<div class="row${r.released?' released':''}"><div class="rlab"><span class="idx">idx ${r.idx}</span><br>请求 ${r.req}${r.released?' · 归还':''}</div><div class="cells">${html}</div></div>`;
+  }).join('');
+}
+function gridHTML(){
+  let h='';
+  for(let p=0;p<NP;p++){
+    const mark = p===0 ? ' reserved' : S.pageMark[p] ? ' '+S.pageMark[p] : '';
+    h += `<div class="prow2"><span class="plab">${p===0?'保留':'页 '+p}</span><div class="pbox${mark}">`;
+    for(let k=0;k<PS;k++){ const i=p*PS+k, s=S.slots[i];
+      h += `<div class="slot${s.st!=='free'?' '+s.st:''}" style="--c:${COLORS[s.owner]||'#2c3858'}"><span class="i">${i}</span><span class="t">${esc(s.tok)}</span></div>`; }
+    h += '</div></div>';
+  }
+  return h;
+}
+function chipsHTML(){
+  if(!S.req) return '';
+  const groups=[]; S.req.chips.forEach((c,i)=>{ const g=Math.floor(i/PS); (groups[g]=groups[g]||[]).push(c); });
+  return groups.map(g=>`<div class="pgroup">${g.map(c=>`<span class="chip ${c.cls}" style="--c:${COLORS[c.owner]}">${esc(c.t)}</span>`).join('')}</div>`).join('');
+}
+
+function render(i){
+  const st=steps[i];
+  $('stitle').innerHTML = st.title ? `<span class="no">${String(i).padStart(2,'0')}</span>${st.title}` : '';
+  $('code').textContent = st.code;
+  $('cap').innerHTML = `<span>${st.cap}</span>`;
+  $('reqname').textContent = S.req ? '请求 '+S.req.name+'（虚线 = 页边界）' : '（空）';
+  $('chips').innerHTML = chipsHTML();
+  $('match').textContent = S.match;
+  $('tree').innerHTML = nodeHTML(S.tree);
+  $('rows').innerHTML = rowsHTML();
+  const c=$('calc'); c.innerHTML = S.calc; c.style.animation='none'; void c.offsetWidth; c.style.animation='';
+  $('grid').innerHTML = gridHTML();
+  $('outloc').textContent = S.outLoc ? `out_cache_loc = [${S.outLoc.join(', ')}]` : '';
+  $('freebox').innerHTML = '空闲页：' + (S.free.length ? S.free.map(p=>`<span class="fp">${p}</span>`).join('') : '<span class="none">无</span>');
+  $('avail').innerHTML = `available_size = 空闲页数 × 4 = <b>${S.free.length * PS}</b> slot`;
+  ['req','ptree','prow','pkv'].forEach(id=>$(id).classList.toggle('focus', S.focus.includes(id)));
+
+  const ov=$('ov');
+  if(S.overlay==='title'){
+    ov.innerHTML = `<h1>page_size > 1：按页分配</h1><h2>SGLang KV Cache 系列 02 · page_size = 4 · 约 3 分钟</h2>`+
+      (started ? '' : `<button class="big" onclick="play()">▶ 开始演示</button>`);
+    ov.classList.remove('hide');
+  } else if(S.overlay==='summary'){
+    ov.innerHTML = `<h1 style="font-size:40px">一句话记住</h1>
+      <div class="sum">Allocator 只管<b>页号</b>，slot = 页号 × page_size + 偏移<br>
+      分配时<b>先填满当前页</b>，跨页才拿新页；decode 在 <b>seq_len % page == 1</b> 时拿新页<br>
+      树里<b>只放整页</b>：前缀按页向下取整，尾部不满的页<b>整页释放</b></div>
+      <div class="path">1. utils/common.py:4590       get_num_new_pages      要几页
+2. allocator/paged.py:183     alloc_extend           prefill 怎么填
+3. allocator/paged.py:231     alloc_decode           decode 何时拿新页
+4. radix_cache.py:182         match_at               前缀按页取整
+5. radix_cache.py:479         cache_finished_req     哪些进树、哪些释放</div>`;
+    ov.classList.remove('hide');
+  } else ov.classList.add('hide');
+}
+
+/* ---------------- playback ---------------- */
+let cur=0, playing=false, started=false, timer=null, voice=false;
+const bar=$('bar');
+steps.forEach((s,k)=>{ const d=document.createElement('div'); d.title=s.title||(k?'总结':'概览'); d.onclick=()=>{goto(k); if(playing) schedule();}; bar.appendChild(d); });
+const total = steps.reduce((a,s)=>a+s.dur,0);
+function goto(i){
+  cur=Math.max(0,Math.min(steps.length-1,i));
+  init();
+  for(let k=0;k<=cur;k++){ clearTransient(); S.overlay=null; steps[k].act(); }
+  render(cur); updateBar(); speak();
+}
+function updateBar(){
+  [...bar.children].forEach((d,k)=>{ d.className = k<cur?'done':(k===cur?'cur':''); d.style.setProperty('--d', steps[k].dur+'ms'); if(k===cur && !playing) d.classList.add('paused'); });
+  const el = steps.slice(0,cur).reduce((a,s)=>a+s.dur,0)/1000;
+  $('time').textContent = `${fmt(el)} / ${fmt(total/1000)}`;
+  $('bplay').textContent = playing ? '⏸' : '▶';
+}
+function fmt(s){ s=Math.round(s); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+function schedule(){ clearTimeout(timer); timer=setTimeout(advance, steps[cur].dur); }
+function advance(){
+  // 开着朗读时，等这句读完再进入下一步
+  if(voice && speechSynthesis.speaking){ timer=setTimeout(advance, 300); return; }
+  if(cur>=steps.length-1){ playing=false; updateBar(); return; }
+  goto(cur+1); schedule();
+}
+function play(){ started=true; if(cur===steps.length-1) goto(0); if(cur===0) goto(1); playing=true; updateBar(); schedule(); }
+function pause(){ playing=false; clearTimeout(timer); speechSynthesis.cancel(); updateBar(); }
+function toggle(){ playing?pause():play(); }
+function speak(){
+  if(!voice || !('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const txt = steps[cur].cap.replace(/<[^>]+>/g,'').replace(/&[a-z]+;/g,'').replace(/_/g,' ').replace(/−/g,'减');
+  const u = new SpeechSynthesisUtterance(txt); u.lang='zh-CN'; u.rate=1.08;
+  const zh = speechSynthesis.getVoices().find(v=>/zh[-_]CN/i.test(v.lang)); if(zh) u.voice=zh;
+  speechSynthesis.speak(u);
+}
+$('bplay').onclick=toggle;
+$('bprev').onclick=()=>{ goto(cur-1); if(playing) schedule(); };
+$('bnext').onclick=()=>{ started=true; goto(cur+1); if(playing) schedule(); };
+$('bvoice').onclick=()=>{ voice=!voice; $('bvoice').textContent = voice?'🔊 朗读':'🔇 朗读'; if(voice) speak(); else speechSynthesis.cancel(); };
+document.addEventListener('keydown',e=>{
+  if(e.code==='Space'){ e.preventDefault(); toggle(); }
+  else if(e.code==='ArrowRight') $('bnext').onclick();
+  else if(e.code==='ArrowLeft') $('bprev').onclick();
+});
+function fit(){ const s=Math.min(innerWidth/1300, innerHeight/800); $('wrap').style.transform=`translate(-50%,-50%) scale(${s})`; }
+addEventListener('resize', fit); fit();
+goto(0);
+</script>
+</body>
+</html>

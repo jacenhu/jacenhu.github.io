@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>投机解码的 KV · SGLang KV Cache 系列 11</title>
+<style>
+  :root{--bg:#0b1020;--panel:#121a2e;--line:#26314d;--text:#e6ebf5;--dim:#8a96b3;--gold:#facc15;--red:#ef4444}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#05070f;color:var(--text);
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;overflow:hidden}
+  code,.mono{font-family:Menlo,Consolas,monospace}
+  #wrap{position:absolute;left:50%;top:50%;width:1280px;height:780px;transform-origin:center center}
+  #stage{position:relative;width:1280px;height:720px;background:var(--bg);border-radius:14px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+  #top{position:absolute;left:24px;right:24px;top:16px;height:44px;display:flex;align-items:center;justify-content:space-between}
+  #stitle{font-size:24px;font-weight:700;letter-spacing:.5px}
+  #stitle .no{color:var(--dim);font-weight:500;margin-right:10px;font-size:18px}
+  #code{font-family:Menlo,Consolas,monospace;font-size:14px;color:#c7d2fe;background:#1e2a4a;border:1px solid #334373;padding:6px 12px;border-radius:8px}
+  #code:empty{opacity:0}
+  .panel{position:absolute;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;transition:box-shadow .3s,border-color .3s}
+  .panel h3{margin:0 0 6px;font-size:15px;display:flex;justify-content:space-between;align-items:baseline}
+  .panel h3 small{font-size:11.5px;color:var(--dim);font-weight:400}
+  .focus{border-color:#7aa2ff!important;box-shadow:0 0 0 2px rgba(122,162,255,.35),0 0 28px rgba(122,162,255,.25)}
+  #pRun{left:24px;top:70px;width:440px;height:290px}
+  #pWait{left:24px;top:370px;width:440px;height:224px}
+  #pKV{left:476px;top:70px;width:326px;height:524px}
+  #pCalc{left:814px;top:70px;width:442px;height:524px}
+  /* request cards */
+  .rq{display:flex;align-items:center;gap:10px;padding:7px 10px;border:1.5px solid #2a3656;border-radius:9px;background:#0e1527;margin-bottom:7px;transition:all .4s;animation:pop .4s ease-out}
+  .rq.pick{border-color:var(--red);box-shadow:0 0 16px rgba(239,68,68,.45);animation:blink .6s ease-in-out infinite alternate}
+  .rq.keep{border-color:#2f6b47}
+  .rq.stain{border-style:dashed}
+  .rq .nm{font-size:16px;font-weight:700;width:22px}
+  .rq .tk{display:flex;gap:2px;flex-wrap:wrap;flex:1}
+  .rq .t{font-family:Menlo,monospace;font-size:10px;padding:2px 4px;border-radius:4px;border:1px solid var(--c);background:color-mix(in srgb,var(--c) 28%,transparent)}
+  .rq .t.o{border-style:dashed;background:transparent;color:var(--c)}
+  .rq .t.n{border-style:dotted;color:var(--dim);border-color:#3b4a6e;background:transparent}
+  .rq .meta{font-family:Menlo,monospace;font-size:10.5px;color:var(--dim);text-align:right;line-height:1.35;white-space:nowrap}
+  .rq .meta b{color:var(--text);font-weight:600}
+  .rq .key{font-family:Menlo,monospace;font-size:11px;padding:1px 6px;border-radius:5px;border:1px solid #33416a;background:#18223d;color:#c7d2fe}
+  .rq .key.hl{border-color:var(--gold);color:var(--gold)}
+  .rq .badge{font-size:10.5px;padding:1px 7px;border-radius:9px;border:1px solid}
+  .rq .badge.ret{color:#fca5a5;border-color:#7f1d1d}
+  .empty{font-size:12.5px;color:var(--dim);font-style:italic}
+  @keyframes pop{from{transform:scale(.92);opacity:0}to{transform:scale(1);opacity:1}}
+  @keyframes blink{from{box-shadow:0 0 0 rgba(239,68,68,0)}to{box-shadow:0 0 18px rgba(239,68,68,.6)}}
+  /* kv grid */
+  #grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+  .slot{height:60px;border-radius:8px;border:1.5px solid #2c3858;background:#0c1222;position:relative;transition:all .45s}
+  .slot .i{position:absolute;left:5px;top:3px;font-family:Menlo,monospace;font-size:10px;color:var(--dim)}
+  .slot .t{position:absolute;left:0;right:0;bottom:6px;text-align:center;font-family:Menlo,monospace;font-size:11px}
+  .slot.reserved{opacity:.35;border-style:dashed}
+  .slot.kv{border:2px solid var(--c);background:color-mix(in srgb,var(--c) 45%,transparent)}
+  .slot.tree{border:2px solid var(--gold);background:color-mix(in srgb,var(--c) 40%,transparent)}
+  .slot.tree::after{content:'🌲';position:absolute;right:4px;top:2px;font-size:10px}
+  .slot.new{border:2px dashed var(--c);background:color-mix(in srgb,var(--c) 14%,transparent)}
+  .slot.freeing{border:2px solid var(--red);background:rgba(239,68,68,.32);animation:blink .6s ease-in-out infinite alternate}
+  .gauge{margin-top:12px;font-size:13px}
+  .gbar{display:flex;height:14px;border-radius:7px;overflow:hidden;background:#1a2340;margin:6px 0}
+  .gbar i{display:block;height:100%;transition:width .5s}
+  .grow2{display:flex;justify-content:space-between;font-family:Menlo,monospace;font-size:12px;color:var(--dim)}
+  .grow2 b{color:var(--text)}
+  .grow2 .bad{color:#fca5a5}.grow2 .ok{color:#86efac}
+  #legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;font-size:11px;color:var(--dim)}
+  #legend span{display:flex;align-items:center;gap:4px}
+  #legend i{width:12px;height:12px;border-radius:3px;display:inline-block}
+  /* calc */
+  #calc{font-family:Menlo,Consolas,monospace;font-size:11.8px;line-height:1.6;white-space:pre;color:#dbe4ff;animation:fadein .45s ease-out}
+  #calc .c{color:var(--dim)}
+  #calc .y{color:var(--gold)}
+  #calc .g{color:#86efac}
+  #calc .r{color:#fca5a5}
+  #log{margin-top:10px;font-family:Menlo,monospace;font-size:11px;line-height:1.5;color:#fde68a;background:#1c1a0c;border:1px solid #57501c;border-radius:7px;padding:6px 8px;white-space:pre-wrap;animation:fadein .4s ease-out}
+  #log:empty{display:none}
+  /* caption */
+  #cap{position:absolute;left:24px;right:24px;top:604px;height:102px;display:flex;align-items:center;justify-content:center;text-align:center;font-size:20px;line-height:1.55;padding:0 30px;
+    background:linear-gradient(180deg,rgba(18,26,46,.9),rgba(18,26,46,.6));border:1px solid var(--line);border-radius:12px}
+  #cap span{animation:fadein .5s ease-out}
+  #cap em{font-style:normal;color:var(--gold)}
+  #cap code{font-size:17px;color:#c7d2fe}
+  @keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  #ov{position:absolute;inset:0;background:radial-gradient(ellipse at center,#16224a 0%,#0b1020 70%);display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .6s;z-index:10}
+  #ov.hide{opacity:0;pointer-events:none}
+  #ov h1{font-size:50px;margin:0 0 14px;letter-spacing:2px}
+  #ov h2{font-size:22px;font-weight:400;color:var(--dim);margin:0 0 34px}
+  #ov .big{font-size:18px;padding:12px 30px;border-radius:30px;background:#4f8cff;color:#fff;border:none;cursor:pointer}
+  #ov .sum{font-size:20px;line-height:1.9;text-align:left}
+  #ov .sum b{color:var(--gold)}
+  #ov .path{margin-top:22px;font-family:Menlo,monospace;font-size:15px;color:#c7d2fe;background:#121a2e;border:1px solid var(--line);padding:14px 22px;border-radius:10px;line-height:1.9;white-space:pre}
+  #ctrl{position:absolute;left:0;right:0;top:732px;height:44px;display:flex;align-items:center;gap:12px;padding:0 6px}
+  #ctrl button{background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;min-width:40px;font-size:15px;cursor:pointer;padding:0 10px}
+  #ctrl button:hover{background:#26325a}
+  #ctrl a.home{display:flex;align-items:center;background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;padding:0 10px;font-size:13px;text-decoration:none;white-space:nowrap}
+  #ctrl a.home:hover{background:#26325a}
+  #bar{flex:1;display:flex;gap:3px;height:10px;cursor:pointer}
+  #bar div{flex:1;background:#232d4b;border-radius:3px;position:relative;overflow:hidden}
+  #bar div.done{background:#4f8cff}
+  #bar div.cur::after{content:'';position:absolute;left:0;top:0;bottom:0;background:#4f8cff;animation:fill var(--d) linear forwards}
+  #bar div.cur.paused::after{animation-play-state:paused}
+  @keyframes fill{from{width:0}to{width:100%}}
+  #time{font-size:13px;color:var(--dim);width:64px;text-align:right}
+
+  #pReq{left:24px;top:70px;width:440px;height:262px}
+  #pDual{left:24px;top:342px;width:440px;height:252px}
+  #pKV{left:476px;top:70px;width:326px;height:524px}
+  #pCalc{left:814px;top:70px;width:442px;height:524px}
+  .tl{display:flex;gap:2px;margin:8px 0 4px}
+  .tl i{flex:1;height:16px;border-radius:3px;background:#141c33;border:1px solid #222c48;transition:all .4s}
+  .tl i.c{background:#4f8cff;border-color:#4f8cff}
+  .tl i.a{background:transparent;border:1.5px dashed #7a8bb5}
+  .tl i.w{background:rgba(79,140,255,.35);border-color:#4f8cff}
+  .tl i.g{background:rgba(250,204,21,.5);border-color:var(--gold)}
+  .tl i.x{background:rgba(239,68,68,.35);border-color:var(--red)}
+  .tl i.f{background:rgba(239,68,68,.32);border-color:var(--red);animation:blink .6s ease-in-out infinite alternate}
+  .tl i.tr{background:rgba(250,204,21,.25);border-color:var(--gold)}
+  .tlx{display:flex;justify-content:space-between;font-family:Menlo,monospace;font-size:10px;color:var(--dim)}
+  .kvn{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}
+  .kvn div{background:#0e1527;border:1px solid #2a3656;border-radius:8px;padding:5px 8px;font-family:Menlo,monospace;font-size:11px;color:var(--dim)}
+  .kvn b{display:block;font-size:17px;color:var(--text);transition:color .3s}
+  .kvn b.hl{color:var(--gold)}
+  .rq .t.d{--c:#a78bfa;border-style:dashed}
+  .rq .t.g{border-color:var(--gold);background:rgba(250,204,21,.25);color:#fde68a}
+  .rq .t.x{border-color:var(--red);background:rgba(239,68,68,.25);color:#fca5a5;text-decoration:line-through}
+  #grid{grid-template-columns:repeat(4,1fr)}
+  #grid.dim{opacity:.3}
+  .slot{height:56px}
+  .slot .s{position:absolute;right:5px;top:3px;font-family:Menlo,monospace;font-size:9.5px;color:#7f8db0}
+  .slot.res{border:1.5px dashed #7a8bb5;background:#10182c}
+  .slot.pend{border:1.5px dashed var(--gold);background:rgba(250,204,21,.07)}
+  .slot.wr{border:2px dashed #4f8cff;background:rgba(79,140,255,.22)}
+  .slot.acc{border:2px solid var(--gold);background:rgba(250,204,21,.28)}
+  .slot.rej{border:2px solid var(--red);background:rgba(239,68,68,.3)}
+  .slot.stale{border:1.5px dashed var(--red);background:rgba(239,68,68,.12)}
+  .slot.tree{border:2px solid var(--gold);background:rgba(79,140,255,.35)}
+  .slot.tree::after{content:''}
+  .dual{display:grid;grid-template-columns:62px repeat(12,1fr);gap:3px;font-family:Menlo,monospace;font-size:10px;margin-top:8px}
+  .dual .h{color:var(--dim);text-align:center}
+  .dual .lb{color:var(--text);font-size:11px;display:flex;align-items:center}
+  .dual .c{height:30px;border-radius:5px;border:1px solid #26314d;background:#0c1222;display:flex;align-items:center;justify-content:center;transition:all .4s}
+  .dual .c.t{border-color:#4f8cff;background:rgba(79,140,255,.3)}
+  .dual .c.d{border-color:#a78bfa;background:rgba(167,139,250,.3)}
+  .dual .c.nw{box-shadow:0 0 10px rgba(250,204,21,.6);border-color:var(--gold)}
+  .dual .c.x{border-color:var(--red);background:rgba(239,68,68,.25)}
+  .dnote{font-size:11.5px;color:var(--dim);margin-top:10px;line-height:1.6}
+  .dnote b{color:var(--gold);font-weight:500}
+  .tag{font-size:10.5px;padding:1px 7px;border-radius:9px;border:1px solid #7a5d10;color:#fde68a;margin-left:6px}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <div id="top"><div id="stitle"></div><div id="code"></div></div>
+
+    <div class="panel" id="pReq"><h3>① 请求 R 的 KV 位置 <small>req_to_token 第 0–23 列</small></h3>
+      <div class="tl" id="tl"></div>
+      <div class="tlx"><span>0</span><span>committed</span><span>allocated</span><span>23</span></div>
+      <div class="kvn" id="kvn"></div>
+      <div class="rq" style="margin-top:10px" id="toks"></div>
+      <div id="legend" style="margin-top:4px">
+        <span><i style="background:#4f8cff"></i>已提交</span><span><i style="border:1.5px dashed #7a8bb5"></i>已分配未用</span>
+        <span><i style="background:rgba(250,204,21,.5)"></i>接受</span><span><i style="background:rgba(239,68,68,.35)"></i>拒绝</span>
+      </div>
+    </div>
+    <div class="panel" id="pDual"><h3>② 同一组 slot，两套 KV <small>位置 10–21</small></h3><div class="dual" id="dual"></div><div class="dnote" id="dnote"></div></div>
+    <div class="panel" id="pKV"><h3>③ KV Pool（target） <small>24 个 slot，slot 0 保留</small></h3>
+      <div id="grid"></div>
+      <div class="gauge" id="gauge"></div>
+    </div>
+    <div class="panel" id="pCalc"><h3>④ 在算什么 <small id="calcsub">allocation_sizing.py</small></h3><div id="calc"></div><div id="log"></div></div>
+
+    <div id="cap"></div>
+    <div id="ov"></div>
+  </div>
+
+  <div id="ctrl">
+    <a class="home" href="../index.html" title="返回目录">☰ 目录</a>
+    <button id="bprev" title="上一步 (←)">⏮</button>
+    <button id="bplay" title="自动演示/暂停 (空格)">▶</button>
+    <button id="bnext" title="下一步 (→)">⏭</button>
+    <div id="bar"></div>
+    <div id="time"></div>
+    <button id="bvoice" title="中文语音朗读">🔇 朗读</button>
+  </div>
+</div>
+
+<script>
+/* 例子：EAGLE，speculative_num_steps=3，eagle_topk=1，num_draft_tokens=4，page_size=1。
+   请求 R 刚 prefill 完 10 个 token：kv_committed_len = kv_allocated_len = 10，
+   已采样 bonus_token b0（KV 还没写，下一轮 verify 时作为树根写入）。
+   位置 p 映射到 slot p+1（slot 0 保留），便于对照。
+
+   数字按源码公式移植（mem_cache/allocation_sizing.py）并用 .venv python 交叉验证：
+     get_alloc_len_per_decode:  page_size == 1 or topk == 1 → max(spec_steps * spec_topk, spec_tokens)
+                                else max(ceil((page-1 + steps + page-1)/page) * page * topk, spec_tokens)
+     get_alloc_reserve_per_decode = 2 * get_alloc_len_per_decode()
+     page_aligned_decode_alloc_lens: nxt = max(cur, ceil_page(kv_committed_len + reserve)); need += nxt - cur
+   结果：(3,1,4,p1,c10,a10) → len 4, reserve 8, nxt 18, need 8
+         (3,1,4,p1,c13,a18) → nxt 21, need 3
+         (3,1,4,p1,c10,a18) → nxt 18, need 0   （overlap 下 committed 滞后一轮）
+         (3,2,4,p4,c10,a12) → len 16, reserve 32, nxt 44, need 32
+         (3,1,4,p4,c10,a12) → len 4, reserve 8, nxt 20, need 8 */
+const N = 24;
+const TOK = ['t0','t1','t2','t3','t4','t5','t6','t7','t8','t9','b0','d1','d2','d3','e1','e2','e3'];
+let S;
+function init(){
+  S = { st:Array(N).fill('free'), tok:Array(N).fill(''), committed:10, allocated:10,
+        tgt:{}, drf:{}, sfree:new Set(), chips:[], dnote:'', overlay:null };
+  for(let p=0;p<10;p++){ S.st[p]='c'; S.tok[p]=TOK[p]; }
+  clearTransient();
+}
+function clearTransient(){ S.focus=[]; S.calc=''; S.log=''; S.hl=new Set(); S.pend=[]; S.overlay=null; S.dimGrid=false; S.calcsub=''; }
+function settle(){ for(let p=0;p<N;p++){ if(S.st[p]==='g'||S.st[p]==='w') S.st[p]='c'; else if(S.st[p]==='x') S.st[p]='stale'; } }
+function alloc(a,b){ for(let p=a;p<b;p++){ S.st[p]='a'; S.hl.add(p);} S.allocated=b; }
+
+const steps = [
+ { title:'', code:'', dur:5000,
+   cap:'投机解码一步要写好几个 token 的 KV，但<em>最后只留下被接受的那几个</em>。KV 是怎么预留、写入、提交和回收的？',
+   act(){ S.overlay='title'; } },
+
+ { title:'设定', code:'', dur:9000,
+   cap:'EAGLE：<em>3 步 draft、topk 1、每轮验证 4 个 token</em>，page_size 1。R 刚 prefill 完 10 个 token。',
+   act(){ S.chips=[['b0','o']];
+     S.calc=`<span class="c"># --speculative-* 参数</span>
+speculative_num_steps       = 3
+speculative_eagle_topk      = 1
+speculative_num_draft_tokens = 4
+page_size                   = 1
+
+R：prompt t0..t9，KV 已写入 10 个
+   kv_committed_len = kv_allocated_len = <span class="y">10</span>
+   已采样 bonus_token <span class="y">b0</span>（KV 还没写）`;
+     S.focus=['pReq','pKV']; } },
+
+ { title:'一轮最多写几个位置', code:'mem_cache/allocation_sizing.py:17  get_alloc_len_per_decode', dur:10000,
+   cap:'一轮 draft 写 steps×topk 个位置，verify 写 num_draft_tokens 个，<em>取两者较大值</em>：max(3, 4) = 4。',
+   act(){ S.calc=`<span class="c"># page_size == 1 or topk == 1 or 无 draft KV</span>
+return max(spec_steps * spec_topk,
+           spec_tokens)
+     = max(3 × 1, 4) = <span class="y">4</span>
+
+<span class="c"># draft：3 步 × topk 1 = 3 个位置</span>
+<span class="c"># verify：树根 + 3 个 draft = 4 个位置</span>`;
+     S.focus=['pCalc']; } },
+
+ { title:'为什么预留 ×2', code:'mem_cache/allocation_sizing.py:53  get_alloc_reserve_per_decode', dur:11000,
+   cap:'overlap 调度下，准备下一轮时<em>上一轮的 kv_committed_len 还没更新</em>。预留两轮的量，滞后一轮也不会越界。',
+   act(){ S.calc=`return <span class="y">2</span> * get_alloc_len_per_decode()  = <span class="y">8</span>
+<span class="c"># "double-buffer that absorbs the</span>
+<span class="c">#  kv_committed_len lag in overlap mode"</span>
+
+最坏情况：上一轮 4 个全接受，真实 committed 14
+但调度器还读到 10：
+  nxt = max(18, 10 + 8) = 18   → 不再分配
+  本轮 verify 写 [14, 18)   <span class="g">仍在 18 以内 ✓</span>`;
+     S.focus=['pCalc']; } },
+
+ { title:'算出要补几个 slot', code:'mem_cache/allocation_sizing.py:62  page_aligned_decode_alloc_lens', dur:9000,
+   cap:'目标长度 nxt = max(已分配, committed + 预留)，<em>只补差值</em>：max(10, 10 + 8) = 18，要新分配 8 个。',
+   act(){ for(let p=10;p<18;p++) S.pend.push(p);
+     S.calc=`cur = r.kv.kv_allocated_len          = 10
+nxt = max(cur,
+          ceil_page(kv_committed_len + reserve))
+    = max(10, 10 + 8)                = <span class="y">18</span>
+num_needed_tokens += nxt − cur       = <span class="y">8</span>
+
+<span class="c"># 由 eagle_prepare_for_decode 调用</span>
+<span class="c"># (eagle_utils.py:1004，先 maybe_evict_swa)</span>`;
+     S.focus=['pReq','pCalc']; } },
+
+ { title:'分配并登记到 req_to_token', code:'mem_cache/allocation.py:731  alloc_for_spec_decode', dur:11000,
+   cap:'page_size 1 时直接分配 8 个 slot，登记到 req_to_token 的 [10, 18)，<em>kv_allocated_len = 18</em>。',
+   act(){ alloc(10,18);
+     S.calc=`if page_size == 1:
+    loc = alloc_token_slots(tree_cache, 8)
+                  → slot 11..18
+else:  <span class="c"># get_last_loc + 分页 extend</span>
+assign_req_to_token_pool_func(cur=10, nxt=18, ...)
+req.kv.kv_allocated_len = max(10, 18) = <span class="y">18</span>
+<span class="c"># committed 仍是 10：这 8 个只是预留</span>`;
+     S.focus=['pKV','pReq']; } },
+
+ { title:'draft 和 target 共用 slot 编号', code:'managers/scheduler.py:1078  draft_worker.alloc_memory_pool', dur:11000,
+   cap:'draft 共用 target 的 <em>req_to_token_pool 和 allocator</em>，只另建 KV tensor：<em>同一个 slot，两个模型各存一份</em>。',
+   act(){ S.dnote=`slot 编号只分配一次；draft KV 按同一 slot 下标写（按共享 allocator 推断）`;
+     S.calc=`<span class="c"># scheduler.py:1070 init_memory_pools</span>
+pool, allocator = tp_worker.get_memory_pool()
+draft_worker.alloc_memory_pool(
+    req_to_token_pool=pool,
+    token_to_kv_pool_allocator=allocator)
+
+<span class="c"># kv_cache_configurator.py</span>
+:638  draft 复用 req_to_token_pool
+:667  draft 自建 token_to_kv_pool（KV tensor）
+:2111 allocator 只在 None 时新建 → <span class="y">共享</span>`;
+     S.focus=['pDual','pCalc']; } },
+
+ { title:'draft 写 3 个位置', code:'speculative/eagle_worker_common.py:212  prepare_for_draft', dur:11000,
+   cap:'draft 跑 3 步：输入 b0、d1、d2，猜出 d1、d2、d3。KV 写到 <em>req_to_token[10 : 13)</em>，只写 draft 这一套。',
+   act(){ S.chips=[['b0','o'],['d1','d'],['d2','d'],['d3','d']];
+     [[10,'b0'],[11,'d1'],[12,'d2']].forEach(([p,t])=>{S.drf[p]={t,nw:1};});
+     S.calc=`<span class="c"># page_size == 1 or topk == 1</span>
+out_cache_loc = req_to_token[
+    seq_lens : seq_lens + topk * num_steps]
+  = 位置 [10, 13) → slot 11..13
+<span class="c"># assign_draft_cache_locs_contiguous</span>
+
+draft KV：10←b0  11←d1  12←d2
+猜出的 draft tokens：<span class="y">d1 d2 d3</span>`;
+     S.focus=['pDual','pReq']; } },
+
+ { title:'verify 写 4 个位置', code:'speculative/eagle_utils.py:513  eagle_prepare_for_verify', dur:11000,
+   cap:'target 一次前向验证 <em>树根 b0 + 3 个 draft</em>，在 target KV 的 [10, 14) 写 4 个位置。此时还不知道哪些会被接受。',
+   act(){ S.chips=[['b0','o'],['d1','d'],['d2','d'],['d3','d']];
+     ['b0','d1','d2','d3'].forEach((t,j)=>{ const p=10+j; S.st[p]='w'; S.tok[p]=t; S.hl.add(p); S.tgt[p]={t,nw:1}; });
+     S.calc=`out_cache_loc = assign_extend_cache_locs_uniform(
+    start_offset   = seq_lens          <span class="c"># 10</span>
+    draft_token_num = 4)
+  = req_to_token[10 : 14] → slot 11..14
+
+target KV：10←b0 11←d1 12←d2 13←d3
+<span class="c"># seq_lens = 本轮之前的长度（spec v2 约定）</span>`;
+     S.focus=['pKV','pDual']; } },
+
+ { title:'接受 2 个 draft + bonus，提交', code:'managers/scheduler_components/batch_result_processor.py:805', dur:12000,
+   cap:'d1、d2 对，d3 错，另得 bonus_token b1：<em>num_accept_tokens = 3</em>，committed 10 → <em>13</em>。',
+   act(){ S.chips=[['d1','g'],['d2','g'],['d3','x'],['b1','o']];
+     S.st[10]=S.st[11]=S.st[12]='g'; S.st[13]='x'; S.committed=13; S.tgt[13]={t:'d3',x:1};
+     S.calc=`num_correct_drafts = 2           <span class="c"># 不含 bonus</span>
+accept_tokens = [d1, d2, <span class="y">b1</span>]     <span class="c"># 含 bonus</span>
+num_accept_tokens = len(accept_tokens) = <span class="y">3</span>
+req.kv.kv_committed_len += 3  → <span class="y">13</span>
+
+<span class="c"># 留下的 KV：位置 10..12（b0 d1 d2）</span>
+<span class="c"># topk == 1：被接受的路径本来就在最前面，</span>
+<span class="c"># 不需要搬 KV（eagle_worker_common.py:640）</span>`;
+     S.focus=['pReq','pCalc']; } },
+
+ { title:'拒绝的位置不释放', code:'speculative/eagle_worker_v2.py:1181  _draft_extend_for_decode', dur:10000,
+   cap:'d3 的 slot <em>不归还</em>，留着等下轮覆盖。draft_extend 在 draft KV 的 [10, 14) 上<em>按 verify 结果重算</em>。',
+   act(){ settle(); S.chips=[['b1','o']];
+     [10,11,12,13].forEach(p=>S.drf[p]={t:['b0','d1','d2','d3'][p-10],nw:1,x:p===13});
+     S.dnote=`位置 13 的两份 KV 都是被拒绝的 d3：下一轮写 b1 时直接覆盖`;
+     S.calc=`[kv_committed_len, kv_allocated_len)
+  = [13, 18)  → slot 14..18 <span class="y">仍归 R</span>
+  位置 13 = 被拒绝的 d3（脏数据）
+
+<span class="c"># draft_extend：窗口 = num_draft_tokens</span>
+prefix_lens = seq_lens            <span class="c"># 10</span>
+extend_lens = 4   → draft KV [10, 14)`;
+     S.focus=['pReq','pDual']; } },
+
+ { title:'下一轮：只补 3 个', code:'mem_cache/allocation_sizing.py:75  nxt = max(cur, …)', dur:11000,
+   cap:'nxt = max(18, 13 + 8) = 21，只<em>新分配 3 个</em>。被拒绝的位置 13 会被新树根 b1 <em>原地覆盖</em>，不走 free/alloc。',
+   act(){ settle(); S.chips=[['b1','o']]; alloc(18,21);
+     S.calc=`cur = kv_allocated_len             = 18
+nxt = max(18, 13 + 8)              = <span class="y">21</span>
+num_needed_tokens = 21 − 18        = <span class="y">3</span>
+→ slot 19, 20, 21
+
+<span class="c"># 已分配未用的 [13, 18) 直接复用</span>
+<span class="c"># 每轮只补“滑出去”的那部分</span>`;
+     S.focus=['pKV','pCalc']; } },
+
+ { title:'第二轮：全部接受', code:'managers/scheduler_components/batch_result_processor.py:805', dur:12000,
+   cap:'e1、e2、e3 全对，再加 bonus_token b2：<em>num_accept_tokens = 4</em>，committed 13 → <em>17</em>。',
+   act(){ settle();
+     S.chips=[['e1','g'],['e2','g'],['e3','g'],['b2','o']];
+     ['b1','e1','e2','e3'].forEach((t,j)=>{ const p=13+j; S.st[p]='g'; S.tok[p]=t; S.hl.add(p); S.tgt[p]={t,nw:1}; });
+     [[13,'b1'],[14,'e1'],[15,'e2']].forEach(([p,t])=>S.drf[p]={t,nw:1});
+     S.committed=17; S.dnote=`位置 13 两份 KV 都已被 b1 覆盖`;
+     S.calc=`draft  写 [13, 16)：b1 e1 e2
+verify 写 [13, 17)：b1 e1 e2 e3
+num_correct_drafts = 3
+accept_tokens = [e1, e2, e3, <span class="y">b2</span>]
+kv_committed_len += 4  → <span class="y">17</span>
+
+<span class="c"># 已分配 21，未用 [17, 21) 共 4 个</span>`;
+     S.focus=['pReq','pKV']; } },
+
+ { title:'请求结束：bigram key 少存 1 个', code:'mem_cache/radix_cache.py:505  cache_finished_req', dur:12000,
+   cap:'b2 是 EOS，R 结束。EAGLE 用 <em>bigram</em> key：17 个 token 只有 16 对，<em>16 个 slot 进树，第 17 个释放</em>。',
+   act(){ settle(); S.chips=[['b2','o']];
+     for(let p=0;p<16;p++) S.st[p]='tr'; S.st[16]='f';
+     S.calc=`token_ids = (input + output)[:kv_committed_len]
+          = 17 个 token
+RadixKey(token_ids, is_bigram=self.is_eagle)
+len(key) = 17 − 1 = <span class="y">16</span>     <span class="c"># radix_cache.py:96</span>
+insert(value = kv_indices[:16])  → 进树
+free(kv_indices[16:])            → <span class="r">slot 17</span>
+
+<span class="c"># 推断：draft 在位置 i 的输入含 token i+1，</span>
+<span class="c"># 所以 KV 要按 (t[i], t[i+1]) 对来复用</span>`;
+     S.focus=['pKV','pCalc']; } },
+
+ { title:'释放多分配的尾巴', code:'mem_cache/common.py:321  _release_overallocated_kv_indices', dur:11000,
+   cap:'最后释放 <em>[committed, allocated) = [17, 21)</em>：拒绝过的和多预留的 slot <em>在这里一次回收</em>。',
+   act(){ settle(); S.chips=[];
+     for(let p=0;p<16;p++) S.st[p]='tr'; S.sfree.add(16); S.st[16]='free';
+     for(let p=17;p<21;p++) S.st[p]='f';
+     S.calc=`<span class="c"># common.py:276 release_kv_cache</span>
+start_p = kv_committed_len    = 17
+end_p   = kv_allocated_len    = 21
+if page_size > 1:
+    start_p = ceil_align(start_p, page_size)
+free_kv_row(req.kv, [(17, 21)])  → <span class="r">slot 18..21</span>
+
+<span class="c"># 非投机解码这里断言 start_p == end_p</span>`;
+     S.focus=['pKV','pReq']; } },
+
+ { title:'容量：draft KV 也要算进去', code:'model_executor/pool_configurator.py:277', dur:10000,
+   cap:'每个 slot 还要存 draft 层的 KV，所以算容量时 <em>cell_size 按层数比例放大</em>，能放的 token 变少。',
+   act(){ for(let p=0;p<N;p++) S.st[p]='free'; S.dimGrid=true;
+     S.calc=`<span class="c"># EAGLE / STANDALONE，且不是 draft worker</span>
+cell_size = int(cell_size × (1 +
+            draft_num_layers / num_layers))
+
+例：target 61 层，MTP draft 1 层
+    × (1 + 1/61) ≈ <span class="y">× 1.016</span>
+→ 同样显存，max_total_num_tokens 少约 1.6%
+<span class="c"># 假设 draft 每层 KV 大小与 target 相同</span>
+<span class="c"># draft 用 target 的 memory_pool_config 建池</span>`;
+     S.focus=['pCalc']; } },
+
+ { title:'边界：topk > 1 要搬 KV', code:'speculative/spec_utils.py:732  move_accept_tokens_to_target_kvcache', dur:11000,
+   cap:'树形 draft 时被接受的节点<em>散在树里</em>，verify 后把它们的 KV <em>搬到 seq_len 起的连续位置</em>。',
+   act(){ for(let p=0;p<N;p++) S.st[p]='free'; S.dimGrid=true;
+     S.calc=`<span class="c"># eagle_worker_common.py:643 → :406</span>
+<span class="c"># _finalize_accept_tree_path</span>
+例：树节点 0(根) 1 2 3，接受路径 [0, 2, 3]
+tgt = req_to_token[seq_len :
+        seq_len + num_correct_drafts + 1]
+src = out_cache_loc[accept_index]
+     <span class="c"># fill_accept_out_cache_loc</span>
+move_kv_cache(tgt, src)
+  节点 0→seq_len, 2→+1, 3→+2`;
+     S.focus=['pCalc']; } },
+
+ { title:'边界：page > 1 且 topk > 1', code:'mem_cache/allocation_sizing.py:47  num_new_pages_per_topk', dur:10000,
+   cap:'每个分支都要按页对齐，<em>最坏情况每个分支各占整页</em>。page 4、topk 2 时一轮按 16 预留，×2 后是 32。',
+   act(){ for(let p=0;p<N;p++) S.st[p]='free'; S.dimGrid=true;
+     S.calc=`num_new_pages_per_topk =
+  ((page−1) + steps + page − 1) // page
+  = (3 + 3 + 3) // 4 = 2
+len = max(2 × 4 × topk 2, 4)   = <span class="y">16</span>
+reserve = 2 × 16                = <span class="y">32</span>
+committed 10, allocated 12：
+  nxt = max(12, ceil4(10+32))   = <span class="y">44</span>
+<span class="c"># topk 1、page 4：len 4，nxt = ceil4(18) = 20</span>`;
+     S.focus=['pCalc']; } },
+
+ { title:'', code:'', dur:13000,
+   cap:'怀疑投机解码 KV 泄漏或越界时，在这 5 个位置打断点，对照 <code>kv_committed_len</code> 和 <code>kv_allocated_len</code>。',
+   act(){ S.overlay='summary'; } },
+];
+
+/* ---------------- render ---------------- */
+const $ = id => document.getElementById(id);
+const GCLS = {c:'kv', a:'res', w:'wr', g:'acc', x:'rej', stale:'stale', f:'freeing', tr:'tree'};
+const TCLS = {c:'c', a:'a', w:'w', g:'g', x:'x', stale:'x', f:'f', tr:'tr'};
+function render(i){
+  const st=steps[i];
+  $('stitle').innerHTML = st.title ? `<span class="no">${String(i).padStart(2,'0')}</span>${st.title}` : '';
+  $('code').textContent = st.code;
+  $('cap').innerHTML = `<span>${st.cap}</span>`;
+  // ① timeline
+  $('tl').innerHTML = S.st.map((s,p)=>{ let c=TCLS[s]||''; if(S.pend.includes(p)) c='a'; return `<i class="${c}" title="${p}"></i>`; }).join('');
+  const reserved = S.st.filter(s=>s==='a'||s==='stale').length;
+  $('kvn').innerHTML = `<div>kv_committed_len<b class="${[9,12].includes(i)?'hl':''}">${S.committed}</b></div>
+    <div>kv_allocated_len<b class="${[5,11].includes(i)?'hl':''}">${S.allocated}</b></div>
+    <div>已分配未提交<b>${S.allocated-S.committed>0 && !S.dimGrid ? S.allocated-S.committed : 0}</b></div>`;
+  $('toks').innerHTML = `<span class="nm" style="color:#4f8cff">R</span><div class="tk">`+
+    (S.chips.length? S.chips.map(([t,k])=>`<span class="t ${k==='o'?'o':k}" style="--c:${k==='d'?'#a78bfa':'#4f8cff'}">${t}</span>`).join('') : '<span class="empty">—</span>')+
+    `</div><div class="meta">紫 = draft<br>虚线 = 待写 KV</div>`;
+  // ② dual
+  let h = `<div></div>`; for(let p=10;p<22;p++) h+=`<div class="h">${p}</div>`;
+  h += `<div class="lb">slot</div>`; for(let p=10;p<22;p++){ const on=p<S.allocated && S.st[p]!=='free'; h+=`<div class="c" style="color:${on?'#c7d2fe':'#3b4a6e'}">${on?p+1:'·'}</div>`; }
+  h += `<div class="lb">target</div>`; for(let p=10;p<22;p++){ const v=S.tgt[p]; const show=v && S.st[p]!=='free'; h+=`<div class="c${show?(v.x||S.st[p]==='stale'?' x':' t')+(v.nw&&S.hl.has(p)?' nw':''):''}">${show?v.t:''}</div>`; }
+  h += `<div class="lb">draft</div>`; for(let p=10;p<22;p++){ const v=S.drf[p]; const show=v && S.st[p]!=='free'; h+=`<div class="c${show?(v.x?' x':' d')+(isNewDraft(i,p)?' nw':''):''}">${show?v.t:''}</div>`; }
+  $('dual').innerHTML = h;
+  $('dnote').innerHTML = S.dnote ? S.dnote : '两套 KV tensor 共用一套 slot 编号（req_to_token）';
+  // ③ grid
+  const g=$('grid'); g.classList.toggle('dim', S.dimGrid);
+  g.innerHTML = Array.from({length:N},(_,s)=>{
+    if(s===0) return `<div class="slot reserved"><span class="i">0</span><span class="t">保留</span></div>`;
+    const p=s-1; let cls = (p<N && S.st[p]!=='free') ? GCLS[S.st[p]] : '';
+    if(S.pend.includes(p)) cls='pend';
+    const lab = cls && ['kv','wr','acc','rej','stale','freeing','tree'].includes(cls) ? S.tok[p] : (cls==='res'||cls==='pend'?'·':'');
+    return `<div class="slot ${cls}" style="--c:#4f8cff"><span class="i">${s}</span>${cls?`<span class="s">p${p}</span>`:''}<span class="t">${lab}</span></div>`;
+  }).join('');
+  const used=S.st.filter(s=>['c','w','g'].includes(s)).length, res=S.st.filter(s=>s==='a'||s==='stale'||s==='x').length,
+        tr=S.st.filter(s=>s==='tr').length, fr=23-used-res-tr-S.st.filter(s=>s==='f').length;
+  $('gauge').innerHTML = `<div class="grow2"><span>提交 <b>${used}</b> · 预留 <b>${res}</b> · 树 <b>${tr}</b> · 空闲 <b>${fr}</b></span></div>
+    <div class="gbar"><i style="width:${used/23*100}%;background:#4f8cff"></i><i style="width:${res/23*100}%;background:#7a8bb5"></i><i style="width:${tr/23*100}%;background:#facc15"></i><i style="width:${fr/23*100}%;background:#1f6f43"></i></div>
+    <div id="legend"><span><i style="background:rgba(79,140,255,.45);border:2px solid #4f8cff"></i>已提交</span><span><i style="border:1.5px dashed #7a8bb5"></i>预留</span><span><i style="border:2px solid #facc15"></i>接受 / 在树里</span><span><i style="background:rgba(239,68,68,.3);border:2px solid #ef4444"></i>拒绝 / 释放</span></div>`;
+  const c=$('calc'); c.innerHTML=S.calc; c.style.animation='none'; void c.offsetWidth; c.style.animation='';
+  $('calcsub').textContent = st.code ? st.code.split(':')[0].split('/').pop() : '';
+  $('log').textContent = S.log;
+  ['pReq','pDual','pKV','pCalc'].forEach(id=>$(id).classList.toggle('focus', S.focus.includes(id)));
+  const ov=$('ov');
+  if(S.overlay==='title'){
+    ov.innerHTML = `<h1>投机解码的 KV</h1><h2>SGLang KV Cache 系列 11 · EAGLE / MTP 的预留、验证、提交与回收 · 约 3 分钟</h2>`+
+      (started ? '' : `<button class="big" onclick="play()">▶ 开始演示</button>`);
+    ov.classList.remove('hide');
+  } else if(S.overlay==='summary'){
+    ov.innerHTML = `<h1 style="font-size:40px">一句话记住</h1>
+      <div class="sum">每轮按 <b>2 × max(steps×topk, num_draft_tokens)</b> 预留，只补差值<br>
+      draft 和 target <b>共用 slot 编号</b>，各存一份 KV；verify 后 committed 只加 <b>num_accept_tokens</b><br>
+      被拒绝的 slot <b>不立即释放</b>，下轮覆盖；结束时 <b>[committed, allocated)</b> 一次回收</div>
+      <div class="path">1. eagle_utils.py:1004        eagle_prepare_for_decode   预留多少
+2. allocation.py:731         alloc_for_spec_decode      kv_allocated_len
+3. eagle_worker_common.py:640  _finalize_accept_tree_path  topk&gt;1 搬 KV
+4. batch_result_processor.py:805  kv_committed_len += …  提交
+5. common.py:321             _release_overallocated_…   回收尾巴</div>`;
+    ov.classList.remove('hide');
+  } else ov.classList.add('hide');
+}
+function isNewDraft(i,p){ return (i===7 && p>=10 && p<13) || (i===10 && p>=10 && p<14) || (i===12 && p>=13 && p<16); }
+
+/* ---------------- playback ---------------- */
+let cur=0, playing=false, started=false, timer=null, voice=false;
+const bar=$('bar');
+steps.forEach((s,k)=>{ const d=document.createElement('div'); d.title=s.title||(k?'总结':'概览'); d.onclick=()=>{goto(k); if(playing) schedule();}; bar.appendChild(d); });
+const total = steps.reduce((a,s)=>a+s.dur,0);
+function goto(i){
+  cur=Math.max(0,Math.min(steps.length-1,i));
+  // 从初始状态把 0..cur 的 act 依次重放，保证任意跳转一致
+  init();
+  for(let k=0;k<=cur;k++){ clearTransient(); steps[k].act(); }
+  render(cur); updateBar(); speak();
+}
+function updateBar(){
+  [...bar.children].forEach((d,k)=>{ d.className = k<cur?'done':(k===cur?'cur':''); d.style.setProperty('--d', steps[k].dur+'ms'); if(k===cur && !playing) d.classList.add('paused'); });
+  const el = steps.slice(0,cur).reduce((a,s)=>a+s.dur,0)/1000;
+  $('time').textContent = `${fmt(el)} / ${fmt(total/1000)}`;
+  $('bplay').textContent = playing ? '⏸' : '▶';
+}
+function fmt(s){ s=Math.round(s); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+function schedule(){ clearTimeout(timer); timer=setTimeout(advance, steps[cur].dur); }
+function advance(){
+  if(voice && speechSynthesis.speaking){ timer=setTimeout(advance, 300); return; }
+  if(cur>=steps.length-1){ playing=false; updateBar(); return; }
+  goto(cur+1); schedule();
+}
+function play(){ started=true; if(cur===steps.length-1) goto(0); if(cur===0) goto(1); playing=true; updateBar(); schedule(); }
+function pause(){ playing=false; clearTimeout(timer); speechSynthesis.cancel(); updateBar(); }
+function toggle(){ playing?pause():play(); }
+function speak(){
+  if(!voice || !('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const txt = steps[cur].cap.replace(/<[^>]+>/g,'').replace(/&[a-z]+;/g,'').replace(/_/g,' ').replace(/−/g,'负');
+  const u = new SpeechSynthesisUtterance(txt); u.lang='zh-CN'; u.rate=1.08;
+  const zh = speechSynthesis.getVoices().find(v=>/zh[-_]CN/i.test(v.lang)); if(zh) u.voice=zh;
+  speechSynthesis.speak(u);
+}
+$('bplay').onclick=toggle;
+$('bprev').onclick=()=>{ goto(cur-1); if(playing) schedule(); };
+$('bnext').onclick=()=>{ started=true; goto(cur+1); if(playing) schedule(); };
+$('bvoice').onclick=()=>{ voice=!voice; $('bvoice').textContent = voice?'🔊 朗读':'🔇 朗读'; if(voice) speak(); else speechSynthesis.cancel(); };
+document.addEventListener('keydown',e=>{
+  if(e.code==='Space'){ e.preventDefault(); toggle(); }
+  else if(e.code==='ArrowRight') $('bnext').onclick();
+  else if(e.code==='ArrowLeft') $('bprev').onclick();
+});
+function fit(){ const s=Math.min(innerWidth/1300, innerHeight/800); $('wrap').style.transform=`translate(-50%,-50%) scale(${s})`; }
+addEventListener('resize', fit); fit();
+goto(0);
+</script>
+</body>
+</html>

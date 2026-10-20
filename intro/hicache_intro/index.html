@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>HiCache 三级缓存 · SGLang KV Cache 系列 09</title>
+<style>
+  :root{--bg:#0b1020;--panel:#121a2e;--line:#26314d;--text:#e6ebf5;--dim:#8a96b3;
+        --A:#4f8cff;--B:#22c55e;--C:#f59e0b;--gold:#facc15;--red:#ef4444;--host:#22d3ee;--l3:#a78bfa}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#05070f;color:var(--text);
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;overflow:hidden}
+  code,.mono{font-family:Menlo,Consolas,monospace}
+  #wrap{position:absolute;left:50%;top:50%;width:1280px;height:780px;transform-origin:center center}
+  #stage{position:relative;width:1280px;height:720px;background:var(--bg);border-radius:14px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+  #top{position:absolute;left:24px;right:24px;top:16px;height:44px;display:flex;align-items:center;justify-content:space-between}
+  #stitle{font-size:24px;font-weight:700;letter-spacing:.5px}
+  #stitle .no{color:var(--dim);font-weight:500;margin-right:10px;font-size:18px}
+  #code{font-family:Menlo,Consolas,monospace;font-size:14px;color:#c7d2fe;background:#1e2a4a;border:1px solid #334373;padding:6px 12px;border-radius:8px}
+  #code:empty{opacity:0}
+  /* request strip */
+  #req{position:absolute;left:24px;right:24px;top:70px;height:74px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 16px;transition:box-shadow .3s,border-color .3s}
+  .plabel{font-size:13px;color:var(--dim);margin-bottom:7px;display:flex;justify-content:space-between}
+  .plabel b{color:var(--text);font-weight:600}
+  .plabel .m{color:var(--gold)}
+  #chips{display:flex;gap:0;flex-wrap:nowrap}
+  .pgroup{display:flex;gap:4px;padding:0 6px;border-right:2px dotted #3b4a6e}
+  .pgroup:last-child{border-right:none}
+  .pgroup:first-child{padding-left:0}
+  .chip{font-family:Menlo,monospace;font-size:12.5px;padding:5px 7px;border-radius:7px;border:1.5px solid var(--line);background:#0f1628;transition:all .4s;animation:pop .35s ease-out}
+  .chip.miss{border-color:#64748b;color:#cbd5e1}
+  .chip.hit{border-color:var(--gold);color:var(--gold);background:rgba(250,204,21,.12)}
+  .chip.host{border-color:var(--host);color:var(--host);background:rgba(34,211,238,.12)}
+  .chip.l3{border-color:var(--l3);color:#d8b4fe;background:rgba(167,139,250,.14)}
+  .chip.done{border-color:var(--c);background:color-mix(in srgb,var(--c) 22%,transparent);color:#fff}
+  @keyframes pop{from{transform:scale(.6);opacity:0}to{transform:scale(1);opacity:1}}
+  /* panels */
+  .panel{position:absolute;top:154px;height:440px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;transition:box-shadow .3s,border-color .3s;overflow:hidden}
+  .panel h3{margin:0 0 2px;font-size:16px}
+  .panel .sub{font-size:12px;color:var(--dim);margin-bottom:8px}
+  .focus{border-color:#7aa2ff!important;box-shadow:0 0 0 2px rgba(122,162,255,.35),0 0 28px rgba(122,162,255,.25)}
+  #ptree{left:24px;width:346px}
+  #ptier{left:382px;width:468px}
+  #pcalc{left:862px;width:394px}
+  /* tree (vertical list) */
+  .troot{font-family:Menlo,monospace;font-size:12px;color:var(--dim);margin-bottom:6px}
+  .tn{position:relative;margin:0 0 7px 14px;padding-left:12px;border-left:2px solid #3b4a6e}
+  .tn .tn{margin-left:10px}
+  .node{background:#0f1628;border:1.5px solid #3b4a6e;border-radius:9px;padding:6px 8px;transition:all .4s}
+  .node.fresh{animation:pop .5s ease-out}
+  .node.hit{border-color:var(--gold);box-shadow:0 0 14px rgba(250,204,21,.35)}
+  .node.hosthit{border-color:var(--host);box-shadow:0 0 14px rgba(34,211,238,.35)}
+  .node.freeing{border-color:var(--red);animation:blink .6s ease-in-out infinite alternate}
+  .nhead{display:flex;align-items:center;gap:6px;font-size:12px}
+  .nname{font-weight:600}
+  .hs{font-family:Menlo,monospace;font-size:10.5px;padding:1px 5px;border-radius:4px;background:color-mix(in srgb,var(--c) 30%,transparent);border:1px solid var(--c)}
+  .badges{display:flex;gap:4px;margin-top:5px;flex-wrap:wrap}
+  .bd{font-family:Menlo,monospace;font-size:10px;padding:1px 5px;border-radius:4px;border:1px solid #33416a;color:#64748b}
+  .bd.on.g{border-color:var(--gold);color:var(--gold)}
+  .bd.on.h{border-color:var(--host);color:var(--host)}
+  .bd.on.s{border-color:var(--l3);color:#d8b4fe}
+  .bd.pend{border-style:dashed;border-color:var(--host);color:var(--host);opacity:.8}
+  .nmeta{font-family:Menlo,monospace;font-size:10px;color:var(--dim);margin-top:3px}
+  .nmeta .lock{color:var(--gold)}
+  .tempty{font-size:12px;color:var(--dim);font-style:italic;margin-left:14px}
+  /* tiers */
+  .tier{margin-bottom:2px}
+  .tlab{font-size:12px;color:var(--dim);display:flex;justify-content:space-between;margin-bottom:4px}
+  .tlab b{color:var(--text)}
+  .prow{display:flex;gap:4px}
+  .pg{flex:1;height:46px;border-radius:7px;border:1.5px solid #2c3858;background:#0c1222;position:relative;transition:all .45s;min-width:0}
+  .pg .i{position:absolute;left:4px;top:2px;font-family:Menlo,monospace;font-size:9px;color:var(--dim)}
+  .pg .t{position:absolute;left:0;right:0;bottom:5px;text-align:center;font-family:Menlo,monospace;font-size:10.5px;white-space:nowrap}
+  .pg.used{border-color:var(--c);background:color-mix(in srgb,var(--c) 40%,transparent)}
+  .pg.pend{border:2px dashed var(--c);background:color-mix(in srgb,var(--c) 12%,transparent)}
+  .pg.res{opacity:.35;border-style:dashed}
+  .pg.freeing{border-color:var(--red);animation:blink .6s ease-in-out infinite alternate}
+  .pg.mark{box-shadow:0 0 12px rgba(250,204,21,.5);border-color:var(--gold)}
+  @keyframes blink{from{box-shadow:0 0 0 rgba(239,68,68,0)}to{box-shadow:0 0 18px rgba(239,68,68,.7)}}
+  .arrows{display:flex;justify-content:center;gap:14px;margin:6px 0}
+  .ar{font-family:Menlo,monospace;font-size:11px;padding:3px 9px;border-radius:12px;border:1px solid #2a3656;color:#4b5878;transition:all .4s}
+  .ar.on{color:#fff;border-color:var(--gold);background:rgba(250,204,21,.14);box-shadow:0 0 12px rgba(250,204,21,.35)}
+  #l3{display:flex;flex-wrap:wrap;gap:4px;min-height:58px;padding:5px;border:1.5px dashed #3b4a6e;border-radius:8px}
+  .kf{font-family:Menlo,monospace;font-size:10.5px;padding:3px 6px;border-radius:5px;border:1px solid var(--c);background:color-mix(in srgb,var(--c) 22%,transparent);animation:pop .35s ease-out}
+  .kf.mark{border-color:var(--gold);box-shadow:0 0 10px rgba(250,204,21,.5)}
+  .l3empty{font-size:12px;color:var(--dim);font-style:italic}
+  #tierfoot{margin-top:8px;font-family:Menlo,monospace;font-size:11.5px;color:#c7d2fe}
+  /* calc */
+  #calc{font-family:Menlo,Consolas,monospace;font-size:12px;line-height:1.62;white-space:pre;color:#dbe4ff;animation:fadein .45s ease-out}
+  #calc .c{color:var(--dim)}
+  #calc .y{color:var(--gold)}
+  #calc .g{color:#86efac}
+  #calc .r{color:#fca5a5}
+  #calc .h{color:var(--host)}
+  #calc .s{color:#d8b4fe}
+  /* caption */
+  #cap{position:absolute;left:24px;right:24px;top:604px;height:102px;display:flex;align-items:center;justify-content:center;text-align:center;font-size:20px;line-height:1.55;padding:0 30px;
+    background:linear-gradient(180deg,rgba(18,26,46,.9),rgba(18,26,46,.6));border:1px solid var(--line);border-radius:12px}
+  #cap span{animation:fadein .5s ease-out}
+  #cap em{font-style:normal;color:var(--gold)}
+  #cap code{font-size:17px;color:#c7d2fe}
+  @keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  /* overlay */
+  #ov{position:absolute;inset:0;background:radial-gradient(ellipse at center,#16224a 0%,#0b1020 70%);display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .6s;z-index:10}
+  #ov.hide{opacity:0;pointer-events:none}
+  #ov h1{font-size:50px;margin:0 0 14px;letter-spacing:2px}
+  #ov h2{font-size:22px;font-weight:400;color:var(--dim);margin:0 0 34px}
+  #ov .big{font-size:18px;padding:12px 30px;border-radius:30px;background:#4f8cff;color:#fff;border:none;cursor:pointer}
+  #ov .sum{font-size:20px;line-height:1.9;text-align:left}
+  #ov .sum b{color:var(--gold)}
+  #ov .path{margin-top:22px;font-family:Menlo,monospace;font-size:15px;color:#c7d2fe;background:#121a2e;border:1px solid var(--line);padding:14px 22px;border-radius:10px;line-height:1.9;white-space:pre}
+  /* controls */
+  #ctrl{position:absolute;left:0;right:0;top:732px;height:44px;display:flex;align-items:center;gap:12px;padding:0 6px}
+  #ctrl button{background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;min-width:40px;font-size:15px;cursor:pointer;padding:0 10px}
+  #ctrl button:hover{background:#26325a}
+  #ctrl a.home{display:flex;align-items:center;background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;padding:0 10px;font-size:13px;text-decoration:none;white-space:nowrap}
+  #ctrl a.home:hover{background:#26325a}
+  #bar{flex:1;display:flex;gap:3px;height:10px;cursor:pointer}
+  #bar div{flex:1;background:#232d4b;border-radius:3px;position:relative;overflow:hidden}
+  #bar div.done{background:#4f8cff}
+  #bar div.cur::after{content:'';position:absolute;left:0;top:0;bottom:0;background:#4f8cff;animation:fill var(--d) linear forwards}
+  #bar div.cur.paused::after{animation-play-state:paused}
+  @keyframes fill{from{width:0}to{width:100%}}
+  #time{font-size:13px;color:var(--dim);width:64px;text-align:right}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <div id="top"><div id="stitle"></div><div id="code"></div></div>
+
+    <div id="req">
+      <div class="plabel"><span><b>当前请求</b>&nbsp; <span id="reqname"></span></span><span id="match" class="m"></span></div>
+      <div id="chips"></div>
+    </div>
+
+    <div class="panel" id="ptree">
+      <h3>① Radix 树（UnifiedRadixCache）</h3><div class="sub">每个节点标出 KV 在哪一级：GPU / 主机 / L3</div>
+      <div id="tree"></div>
+    </div>
+
+    <div class="panel" id="ptier">
+      <h3>② 三级存储</h3><div class="sub">page_size = 4；一个方块 = 一页 4 个 token；标签 = 页哈希</div>
+      <div class="tier"><div class="tlab"><span><b>L1 GPU</b> device pool · 16 token</span><span id="l1free"></span></div><div class="prow" id="l1"></div></div>
+      <div class="arrows"><span class="ar" id="ar_d2h">⬇ D2H 写穿 write</span><span class="ar" id="ar_h2d">⬆ H2D 逐层 load</span></div>
+      <div class="tier"><div class="tlab"><span><b>L2 主机内存</b> host pool · 36 token</span><span id="l2free"></span></div><div class="prow" id="l2"></div></div>
+      <div class="arrows"><span class="ar" id="ar_set">⬇ batch_set 写 L3</span><span class="ar" id="ar_get">⬆ batch_get 预取</span></div>
+      <div class="tier"><div class="tlab"><span><b>L3 外部存储</b> file / mooncake / hf3fs …</span><span>key = 页哈希</span></div><div id="l3"></div></div>
+      <div id="tierfoot"></div>
+    </div>
+
+    <div class="panel" id="pcalc">
+      <h3>③ 参数与计算</h3><div class="sub">本例的数字都按源码公式算出</div>
+      <div id="calc"></div>
+    </div>
+
+    <div id="cap"></div>
+    <div id="ov"></div>
+  </div>
+
+  <div id="ctrl">
+    <a class="home" href="../index.html" title="返回目录">☰ 目录</a>
+    <button id="bprev" title="上一步 (←)">⏮</button>
+    <button id="bplay" title="自动演示/暂停 (空格)">▶</button>
+    <button id="bnext" title="下一步 (→)">⏭</button>
+    <div id="bar"></div>
+    <div id="time"></div>
+    <button id="bvoice" title="中文语音朗读">🔇 朗读</button>
+  </div>
+</div>
+
+<script>
+const COLORS = {A:'#4f8cff', X:'#f59e0b', B:'#22c55e', C:'#e879f9', Y:'#94a3b8', Z:'#64748b', W:'#f472b6'};
+const NDEV = 5, NHOST = 9;
+const PREFIX = ['You','are','a','bot','Be','kind','and','brief','Q:','what','is','KV'];
+const B_PROMPT = PREFIX.concat(['why','is','it','?']);
+const C_PROMPT = PREFIX.concat(['how','to','use','?']);
+
+let S;
+function init(){
+  S = {
+    dev: Array.from({length:NDEV}, ()=>null),     // 页 0 保留
+    host: Array.from({length:NHOST}, ()=>null),
+    l3: [], tree: [], req:null, overlay:null,
+  };
+  clearTransient();
+}
+function clearTransient(){
+  S.focus=[]; S.match=''; S.calc=''; S.flow=[]; S.devMark={}; S.hostMark={}; S.l3Mark={}; S.foot='';
+  walkAll(n=>{ n.cls=''; });
+}
+function walkAll(f){ const w=n=>{ f(n); n.children.forEach(w); }; S.tree.forEach(w); }
+function find(id){ let r=null; walkAll(n=>{ if(n.id===id) r=n; }); return r; }
+function removeNode(id){ const rm=arr=>{ const k=arr.findIndex(n=>n.id===id); if(k>=0){ arr.splice(k,1); return true; } return arr.some(n=>rm(n.children)); }; rm(S.tree); }
+function mk(id, owner, name, hs){ return {id, owner, name, hs, dev:null, host:null, l3:false, pend:false, hit:0, lock:0, children:[], cls:'fresh'}; }
+function putDev(pages, owner, hs, st){ pages.forEach((p,k)=>S.dev[p]={owner, h:hs[k], st:st||'used'}); }
+function putHost(pages, owner, hs, st){ pages.forEach((p,k)=>S.host[p]={owner, h:hs[k], st:st||'used'}); }
+function clrDev(pages){ pages.forEach(p=>S.dev[p]=null); }
+function clrHost(pages){ pages.forEach(p=>S.host[p]=null); }
+function addL3(owner, hs){ hs.forEach(h=>S.l3.push({h, owner})); }
+function chips(toks, owner, f){ return toks.map((t,i)=>({t, owner, cls:f(i)})); }
+const HA=['h1','h2','h3'];
+
+const steps = [
+ { title:'', code:'', dur:5000,
+   cap:'GPU 显存放不下所有前缀。HiCache 把 KV 往<em>主机内存</em>和<em>外部存储</em>下沉，命中时再搬回来。',
+   act(){ S.overlay='title'; } },
+
+ { title:'三级结构与启动', code:'mem_cache/registry.py:195  init_hicache', dur:11000,
+   cap:'开 <code>--enable-hierarchical-cache</code> 后，运行时建的是 <em>UnifiedRadixCache</em> + <em>init_hicache</em>，不是 HiRadixCache。',
+   act(){ S.calc=`<span class="c"># registry.py:190 / 195</span>
+cache = <span class="y">UnifiedRadixCache</span>(params)
+if enable_hierarchical_cache:
+    cache.<span class="y">init_hicache</span>(server_args, params)
+<span class="c"># hiradix_cache.py:84 HiRadixCache 只剩类定义，</span>
+<span class="c"># 算法同名、最好读；本图解引用 unified 版</span>
+
+<span class="c"># 主机池大小 pool_host/base.py:156-159</span>
+size     = int(16 × hicache_ratio 2.0) = 32
+page_num = 32 // 4 + 1 = <span class="y">9</span>
+size     = 9 × 4 = <span class="y">36</span> token
+<span class="c"># --hicache-size（GB）非 0 时覆盖 ratio</span>`;
+     S.focus=['ptier','pcalc']; } },
+
+ { title:'A 进树：每页一个链式哈希', code:'unified_tree_core.py:1425  compute_node_hash_values', dur:11000,
+   cap:'A 的 12 个 token（3 页）进树，占 GPU 页 1–3。每页算一个<em>链式哈希</em>：h2 由 h1 和第 2 页 token 算出。',
+   act(){ S.req={name:'A', chips:chips(PREFIX,'A',()=>'done')}; S.match='12 token → 3 页';
+     const n=mk('A','A','A',HA); n.dev=[1,2,3]; S.tree.push(n); putDev([1,2,3],'A',HA);
+     S.calc=`<span class="c"># utils.py:164 compute_node_hash_values</span>
+parent_hash = 父节点 hash_value[-1]（根 = None）
+get_storage_hash_str(key, parent_hash, 4)
+h1 = H(None, [You are a bot])
+h2 = H(<span class="y">h1</span>, [Be kind and brief])
+h3 = H(<span class="y">h2</span>, [Q: what is KV])
+<span class="c"># 同样内容 + 同样前缀 → 同样 key</span>
+<span class="c"># TreeNode：value=GPU, host_value=主机,</span>
+<span class="c">#   hash_value=每页一个  radix_cache.py:256</span>`;
+     S.focus=['ptree','pcalc']; } },
+
+ { title:'写穿触发：hit_count ≥ 阈值', code:'unified_tree_core.py:1010  _inc_hit_count_and_check', dur:10000,
+   cap:'默认 <em>write_through</em> 阈值是 1：节点第一次插入就满足，立刻生成一个 <em>BackupKV</em> 动作，把它备份到主机。',
+   act(){ const n=find('A'); n.hit=1; n.cls='hit';
+     S.calc=`<span class="c"># unified_radix_cache.py:510</span>
+write_through_threshold =
+    1 if policy == "write_through" else 2
+
+<span class="c"># 新叶子插入后 (unified_tree_core.py:1321)</span>
+node.hit_count += 1            → <span class="y">1</span>
+not backuped and 1 ≥ 1         → <span class="g">备份</span>
+<span class="c"># 祖先没备份就先备份祖先（:2294），</span>
+<span class="c"># 保证已备份节点是从根开始的连续前缀</span>`;
+     S.focus=['ptree','pcalc']; } },
+
+ { title:'D2H：异步拷到主机', code:'mem_cache/l2_transfer.py:57  submit_device_to_host', dur:11000,
+   cap:'先在主机池<em>分配 12 个 slot</em>（页 0–2），再在 <em>device_to_host_stream</em> 上一次拷完所有层。',
+   act(){ const n=find('A'); n.pend=true; n.lock=1; putHost([0,1,2],'A',HA,'pend'); S.flow=['d2h'];
+     S.calc=`<span class="c"># hybrid_cache_controller.py:360 write</span>
+host_indices = mem_pool_host.alloc(12)
+             = [0..11]  → 主机页 <span class="h">0,1,2</span>
+write_queue.append(CacheOperation)
+<span class="c"># cache_controller.py:926 start_writing</span>
+submit_device_to_host(...)
+  with device_to_host_stream:
+    backup_from_device_all_layer
+<span class="c"># 拷贝期间 lock_ref 保护 GPU 页不被淘汰</span>`;
+     S.focus=['ptier']; } },
+
+ { title:'确认完成，再写 L3', code:'unified_radix_cache.py:1713  _finish_write_through_ack', dur:11000,
+   cap:'<em>writing_check</em> 在 TP 间取 MIN，所有卡都拷完才确认。确认后解锁，并把三页<em>按哈希写进 L3</em>。',
+   act(){ const n=find('A'); n.pend=false; n.lock=0; n.host=[0,1,2]; n.l3=true; putHost([0,1,2],'A',HA); addL3('A',HA);
+     S.flow=['set']; HA.forEach(h=>S.l3Mark[h]=1);
+     S.calc=`<span class="c"># writing_check  unified:3317</span>
+finish = 本卡已完成的 ack 数
+all_reduce(finish, <span class="y">MIN</span>)   <span class="c"># TP 一致</span>
+<span class="c"># _finish_write_through_ack</span>
+dec_lock_ref(A)
+write_backup_storage(A)        <span class="c"># :1900</span>
+  → controller.write_storage → 后台线程
+<span class="c"># cache_controller.py:1618 _page_backup</span>
+batch_set([<span class="s">h1,h2,h3</span>], 主机页 0,1,2)`;
+     S.focus=['ptier','ptree']; } },
+
+ { title:'X 挤满 GPU：A 降为主机副本', code:'unified_tree_core.py:1558  evict_device_leaf', dur:12000,
+   cap:'X 要 3 页，GPU 只剩 1 页。A 已备份，淘汰时只<em>释放 GPU 页</em>，节点留在树里，变成<em>只在主机</em>（value = None）。',
+   act(){ const a=find('A'); a.dev=null; a.cls='hosthit'; clrDev([1,2,3]);
+     const XH=['x1','x2','x3']; const x=mk('X','X','X',XH); x.dev=[4,1,2]; x.host=[3,4,5]; x.l3=true; x.hit=1; S.tree.push(x);
+     putDev([4,1,2],'X',XH); putHost([3,4,5],'X',XH); addL3('X',XH);
+     S.req={name:'X', chips:chips(Array(12).fill('…'),'X',()=>'done')}; S.match='需要 3 页';
+     S.calc=`空闲 [4] 只够 1 页 → evict 叶子 A
+<span class="c"># evict_device_leaf：</span>
+backuped     → <span class="g">_demote</span>：释放 GPU 页 1,2,3
+               节点保留，evicted = True
+未备份       → 整个节点删掉
+<span class="c"># X 拿页 4,1,2；结束后同样写穿</span>
+X：主机页 3,4,5，L3 <span class="s">x1..x3</span>
+<span class="c"># evicted ⇔ value is None    radix:286</span>
+<span class="c"># backuped ⇔ host_value 非空 radix:290</span>`;
+     S.devMark={4:1,1:1,2:1}; S.focus=['ptree','ptier']; } },
+
+ { title:'三种写策略', code:'unified_radix_cache.py:510  write_through_threshold', dur:11000,
+   cap:'<em>write_through_selective</em> 要命中 2 次才备份，冷数据被淘汰就直接丢；<em>write_back</em> 平时不写，淘汰时才备份。',
+   act(){ S.calc=`<span class="c"># --hicache-write-policy</span>
+<span class="y">write_through</span>（默认）阈值 1
+  第一次插入就 D2H，淘汰时只降级
+<span class="y">write_through_selective</span> 阈值 2
+  只备份被复用过的；hit 1 的叶子淘汰即删
+<span class="y">write_back</span>
+  hit 不计数；淘汰时再备份
+  <span class="c">unified_tree_core.py:1570 BackupKV</span>
+<span class="c"># 写穿成本在空闲带宽里，换来淘汰时</span>
+<span class="c"># 不用等拷贝</span>`;
+     S.focus=['pcalc']; } },
+
+ { title:'B 到达：GPU 0，主机命中 12', code:'unified_radix_cache.py:565  match_prefix', dur:11000,
+   cap:'B 前 12 个 token 与 A 相同，但 A 节点已不在 GPU：<em>GPU 命中 0</em>，<em>host_hit_length = 12</em>。',
+   act(){ S.req={name:'B', chips:chips(B_PROMPT,'B',i=>i<12?'host':'miss')}; S.match='GPU 0 · 主机 12 / 16';
+     find('A').cls='hosthit';
+     S.calc=`max prefix = 16 − 1 = 15 → 按页 <span class="y">12</span>
+走树：A 节点 [h1 h2 h3] 全部匹配
+device_indices   = []      <span class="c"># A.value 为 None</span>
+last_device_node = root
+<span class="c"># components/full.py:128</span>
+best_match_node 往上到 last_device_node，
+累加 host_value 长度
+host_hit_length  = <span class="h">12</span>`;
+     S.focus=['req','ptree']; } },
+
+ { title:'init_load_back：要么全搬，要么不搬', code:'unified_radix_cache.py:1730  load_back', dur:11000,
+   cap:'调度器准备 B 时调 <em>init_load_back</em>。少于 <em>10 个 token</em> 不值得搬，超出显存配额也不搬；否则整段搬回。',
+   act(){ const a=find('A'); a.lock=1;
+     S.calc=`<span class="c"># schedule_policy.py:1402 add_one_req</span>
+if req.needs_host_load_back():
+    tree_cache.init_load_back(...)
+<span class="c"># unified:3430 → load_back(:1730)</span>
+inc_host_lock_ref / inc_lock_ref 锁住路径
+<span class="c"># _load_back_transfers  :1789</span>
+kv_tokens = <span class="y">12</span>  ≥ load_back_threshold 10
+12 + delta ≤ mem_quota            → <span class="g">搬</span>
+<span class="c"># 不满足就返回 False，B 全部重算</span>`;
+     S.focus=['pcalc','ptree']; } },
+
+ { title:'H2D：先腾 GPU 页再拷回', code:'mem_cache/l2_transfer.py:74  submit_host_to_device', dur:11000,
+   cap:'GPU 只剩 1 页，先把 X 降级腾出 3 页，<em>controller.load</em> 分到页 3,4,1，在 H2D 流上<em>逐层</em>拷回。',
+   act(){ const x=find('X'); x.dev=null; clrDev([4,1,2]);
+     const a=find('A'); a.dev=[3,4,1]; a.cls='hosthit'; putDev([3,4,1],'A',HA,'pend'); S.flow=['h2d'];
+     S.calc=`<span class="c"># _load_back_transfers  unified:1814</span>
+空闲 [3] 不够 12 → evict_for_alloc
+  X 降级，释放 GPU 页 4,1,2
+<span class="c"># hybrid_cache_controller.py:554 load</span>
+alloc(12) → GPU 页 <span class="y">3,4,1</span>
+<span class="c"># cache_controller.py:1056 start_loading</span>
+submit_host_to_device(layer_num = L)
+  for layer_id in range(L):
+     拷第 layer_id 层 → on_layer_done
+B 新的 4 个 token 再分 1 页（页 2）`;
+     S.devMark={3:1,4:1,1:1}; S.focus=['ptier']; } },
+
+ { title:'逐层重叠：算第 i 层只等第 i 层', code:'mem_cache/memory_pool.py:2488  get_key_buffer', dur:11000,
+   cap:'前向时 attention 取第 i 层 KV 前<em>只等第 i 层拷完</em>。第 0 层在算时，后面的层还在拷，<em>拷贝和计算重叠</em>。',
+   act(){ putDev([3,4,1],'A',HA); putDev([2],'B',['b4']); const a=find('A'); a.lock=1;
+     S.req.chips.forEach((c,i)=>{ if(i>=12) c.cls='done'; });
+     S.calc=`<span class="c"># memory_pool.py:2493</span>
+def get_key_buffer(layer_id):
+  layer_transfer_counter
+     .<span class="y">wait_until</span>(layer_id)
+  return k_buffer[layer_id]
+
+H2D 流  │L0│L1│L2│L3│ …
+计算流     │L0│L1│L2│L3│ …
+<span class="c"># 只有第 0 层的拷贝露在关键路径上</span>`;
+     S.devMark={3:1,4:1,1:1}; S.focus=['pcalc','ptier']; } },
+
+ { title:'主机也满了：evict_host', code:'unified_radix_cache.py:1312  evict_host', dur:12000,
+   cap:'之后 Y、Z、W 陆续写穿，主机池满：只淘汰<em>已不在 GPU、无人引用</em>的主机叶子，<em>L3 仍留着 h1–h3</em>。',
+   act(){ const a=find('A'); a.lock=0;
+     const b=mk('Bs','B','B 后缀',['b4']); b.dev=[2]; b.host=[6]; b.l3=true; b.hit=1; a.children.push(b); addL3('B',['b4']);
+     // Y Z W 依次进入；X、b4、A 的主机副本先后被淘汰
+     removeNode('X'); removeNode('A'); clrHost([0,1,2,3,4,5,6]); clrDev([1,2,3,4]);
+     const Y=['y1','y2','y3'], Z=['z1','z2','z3'], W=['w1','w2','w3'];
+     const y=mk('Y','Y','Y',Y); y.host=[7,8,3]; y.l3=true; y.hit=1;
+     const z=mk('Z','Z','Z',Z); z.host=[4,5,6]; z.l3=true; z.hit=1;
+     const w=mk('W','W','W',W); w.dev=[1,2,3]; w.host=[0,1,2]; w.l3=true; w.hit=1;
+     S.tree.push(y,z,w); putHost([7,8,3],'Y',Y); putHost([4,5,6],'Z',Z); putHost([0,1,2],'W',W); putDev([1,2,3],'W',W);
+     addL3('Y',Y); addL3('Z',Z); addL3('W',W);
+     S.req={name:'Y / Z / W', chips:chips(Array(12).fill('…'),'W',()=>'done')}; S.match='主机池 9 / 9 页';
+     S.calc=`B 结束：b4 写穿到主机页 6 和 L3
+<span class="c"># 写穿前主机不够 → evict_host（:1312）</span>
+<span class="c"># full.py:234 drive_host_eviction</span>
+候选 = evictable_host_leaves（LRU）
+  条件：GPU 已淘汰 且 host_lock_ref == 0
+Y 进：淘汰 X 的主机页 3,4,5
+Z 进：淘汰 b4（页 6）
+W 进：A 成了主机叶子 → 淘汰页 0,1,2
+<span class="r">A 从树里删除</span>，但 L3 的 <span class="s">h1..h3</span> 还在`;
+     HA.forEach(h=>S.l3Mark[h]=1); S.focus=['ptier','ptree']; } },
+
+ { title:'C 到达：两级都没命中，查 L3', code:'managers/scheduler.py:3150  _prefetch_kvcache', dur:11000,
+   cap:'C 的前 12 个 token 也和 A 相同，但 GPU、主机都已没有。调度器对未命中的部分发起 <em>prefetch_from_storage</em>。',
+   act(){ S.req={name:'C', chips:chips(C_PROMPT,'C',()=>'miss')}; S.match='GPU 0 · 主机 0 / 16';
+     S.calc=`<span class="c"># scheduler.py:3130-3150</span>
+matched = len(prefix_indices) + host_hit = 0
+new_input_tokens = fill_ids[0 : 15]
+prefetch_from_storage(..., last_hash=None)
+<span class="c"># unified:1991 prefetch_from_storage</span>
+prefetch_key 按页对齐 → <span class="y">12</span> token
+<span class="c"># :2053 不到阈值不预取</span>
+12 ≥ prefetch_threshold <span class="y">8</span>   <span class="g">发起</span>
+<span class="c"># 默认 256；本例 extra_config 设为 8</span>
+<span class="c"># hybrid_cache_controller.py:258</span>`;
+     S.focus=['req','pcalc']; } },
+
+ { title:'按哈希查 L3：遇到第一个缺页就停', code:'hybrid_cache_controller.py:638  _storage_hit_query', dur:11000,
+   cap:'预取线程用 C 的 token <em>重新算出 h1→h2→h3</em>，与 A 当初写入的 key 相同。<em>batch_exists</em> 返回从头连续存在的页数。',
+   act(){ S.req.chips.forEach((c,i)=>{ if(i<12) c.cls='l3'; }); S.match='GPU 0 · 主机 0 · L3 12 / 16';
+     HA.forEach(h=>S.l3Mark[h]=1);
+     S.calc=`hash = get_storage_hash_str(tokens, None)
+     = [<span class="s">h1, h2, h3</span>]   <span class="c"># 与 A 相同</span>
+<span class="c"># hicache_storage.py:321 batch_exists</span>
+for i, k in enumerate(keys):
+    if not exists(k): return i
+→ 3 页 = <span class="y">12</span> token
+<span class="c"># cache_controller.py:1505 _sync_storage_hit</span>
+all_reduce(<span class="y">MIN</span>)  各卡取最短的公共命中`;
+     S.focus=['ptier','pcalc']; } },
+
+ { title:'batch_get：L3 → 主机', code:'managers/cache_controller.py:1271  _page_transfer', dur:11000,
+   cap:'命中后才<em>分配主机空间</em>：主机满，先淘汰最久未用的 Y。再按 batch 用 <em>batch_get</em> 把三页读进主机页 7,8,3。',
+   act(){ removeNode('Y'); clrHost([7,8,3]);
+     putHost([7,8,3],'C',HA,'pend'); S.flow=['get']; HA.forEach(h=>S.l3Mark[h]=1);
+     S.calc=`<span class="c"># unified:2877 _try_alloc_storage_hit</span>
+host_indices = mem_pool_host.alloc(12)
+  None → evict_host(12)  <span class="r">淘汰 Y</span>
+  alloc(12) → 主机页 <span class="h">7,8,3</span>
+<span class="c"># _page_transfer：一批一批读</span>
+for batch in hash_value:
+    hit = batch_get(batch, host_indices)
+    if hit < len(batch): 停止
+completed_tokens = <span class="y">12</span>`;
+     S.focus=['ptier']; } },
+
+ { title:'预取完成：插入主机节点，再搬回 GPU', code:'unified_radix_cache.py:2197  check_prefetch_progress', dur:12000,
+   cap:'默认 <em>timeout</em> 策略：完成或超时才放行 C。拿到的页作为<em>只在主机</em>的节点插回树，然后和 B 一样 <em>load_back</em> 到 GPU。',
+   act(){ const c=mk('Cp','C','C 预取',HA); c.host=[7,8,3]; c.l3=true; c.cls='hosthit'; S.tree.unshift(c); putHost([7,8,3],'C',HA);
+     S.req.chips.forEach((ch,i)=>{ if(i<12) ch.cls='host'; }); S.match='→ 主机命中 12，load_back';
+     S.calc=`<span class="c"># scheduler.py:3956 每轮调度检查</span>
+policy: best_effort | wait_complete | <span class="y">timeout</span>
+timeout = base + 页数 × per_page   <span class="c">:2165</span>
+  per_page = 4 / 1024 × 0.25
+  = 1.0 + 3 × 0.00098 ≈ <span class="y">1.003 s</span>
+<span class="c"># _handle_prefetch_result (:2228)</span>
+tree_core.insert_host(h1..h3, 页 7,8,3)
+下一轮 match_prefix：host_hit = <span class="h">12</span>
+→ init_load_back → H2D（同 B）`;
+     S.focus=['ptree','pcalc']; } },
+
+ { title:'', code:'', dur:13000,
+   cap:'开 <code>--enable-hierarchical-cache</code>，在这 5 个位置打断点，看一个前缀怎样在 GPU、主机、L3 之间上下移动。',
+   act(){ S.overlay='summary'; } },
+];
+
+/* ---------------- render ---------------- */
+const $ = id => document.getElementById(id);
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function nodeHTML(n){
+  const hs = n.hs.map(h=>`<span class="hs" style="--c:${COLORS[n.owner]}">${h}</span>`).join('');
+  const g = n.dev ? `<span class="bd on g">GPU ${n.dev.join(',')}</span>` : `<span class="bd">GPU —</span>`;
+  const h = n.pend ? `<span class="bd pend">主机 拷贝中</span>` : n.host ? `<span class="bd on h">主机 ${n.host.join(',')}</span>` : `<span class="bd">主机 —</span>`;
+  const s = n.l3 ? `<span class="bd on s">L3 ✓</span>` : `<span class="bd">L3 —</span>`;
+  const lock = n.lock ? `<span class="lock">lock ${n.lock}</span>` : 'lock 0';
+  return `<div class="tn"><div class="node ${n.cls||''}"><div class="nhead"><span class="nname" style="color:${COLORS[n.owner]}">${n.name}</span>${hs}</div>
+    <div class="badges">${g}${h}${s}</div><div class="nmeta">hit_count ${n.hit} · ${lock}${n.dev?'':' · evicted'}</div></div>
+    ${n.children.map(nodeHTML).join('')}</div>`;
+}
+function treeHTML(){
+  return `<div class="troot">root</div>` + (S.tree.length ? S.tree.map(nodeHTML).join('') : '<div class="tempty">（空树）</div>');
+}
+function pagesHTML(arr, marks, reserved){
+  return arr.map((p,k)=>{
+    if(reserved && k===0) return `<div class="pg res"><span class="i">页 0</span><span class="t">保留</span></div>`;
+    const cls = 'pg' + (p ? (p.st==='pend'?' pend':' used') : '') + (marks[k]?' mark':'');
+    return `<div class="${cls}" style="--c:${p?COLORS[p.owner]:'#2c3858'}"><span class="i">${k}</span><span class="t">${p?p.owner+' '+p.h:''}</span></div>`;
+  }).join('');
+}
+function l3HTML(){
+  if(!S.l3.length) return '<span class="l3empty">（空）</span>';
+  return S.l3.map(k=>`<span class="kf${S.l3Mark[k.h]?' mark':''}" style="--c:${COLORS[k.owner]}">${k.h}</span>`).join('');
+}
+function chipsHTML(){
+  if(!S.req) return '';
+  const groups=[]; S.req.chips.forEach((c,i)=>{ const g=Math.floor(i/4); (groups[g]=groups[g]||[]).push(c); });
+  return groups.map(g=>`<div class="pgroup">${g.map(c=>`<span class="chip ${c.cls}" style="--c:${COLORS[c.owner]}">${esc(c.t)}</span>`).join('')}</div>`).join('');
+}
+
+function render(i){
+  const st=steps[i];
+  $('stitle').innerHTML = st.title ? `<span class="no">${String(i).padStart(2,'0')}</span>${st.title}` : '';
+  $('code').textContent = st.code;
+  $('cap').innerHTML = `<span>${st.cap}</span>`;
+  $('reqname').textContent = S.req ? '请求 '+S.req.name+'（虚线 = 页边界；金 GPU / 青 主机 / 紫 L3 命中）' : '（空）';
+  $('chips').innerHTML = chipsHTML();
+  $('match').textContent = S.match;
+  $('tree').innerHTML = treeHTML();
+  $('l1').innerHTML = pagesHTML(S.dev, S.devMark, true);
+  $('l2').innerHTML = pagesHTML(S.host, S.hostMark, false);
+  $('l3').innerHTML = l3HTML();
+  $('l1free').textContent = '空闲页 ' + S.dev.filter((p,k)=>k>0&&!p).length + ' / 4';
+  $('l2free').textContent = '空闲页 ' + S.host.filter(p=>!p).length + ' / 9';
+  ['d2h','h2d','set','get'].forEach(f=>$('ar_'+f).classList.toggle('on', S.flow.includes(f)));
+  const c=$('calc'); c.innerHTML = S.calc; c.style.animation='none'; void c.offsetWidth; c.style.animation='';
+  ['req','ptree','ptier','pcalc'].forEach(id=>$(id).classList.toggle('focus', S.focus.includes(id)));
+
+  const ov=$('ov');
+  if(S.overlay==='title'){
+    ov.innerHTML = `<h1>HiCache 三级缓存</h1><h2>SGLang KV Cache 系列 09 · GPU L1 → 主机内存 L2 → 外部存储 L3 · 约 3 分钟</h2>`+
+      (started ? '' : `<button class="big" onclick="play()">▶ 开始演示</button>`);
+    ov.classList.remove('hide');
+  } else if(S.overlay==='summary'){
+    ov.innerHTML = `<h1 style="font-size:40px">一句话记住</h1>
+      <div class="sum">节点进树就<b>写穿到主机</b>，再按<b>页哈希</b>写进 L3；GPU 淘汰只是<b>降级</b><br>
+      GPU 未命中、主机命中：<b>load_back</b> 全搬或不搬，<b>逐层</b>拷回与计算重叠<br>
+      两级都没有：用 token 重算哈希查 L3，<b>prefetch</b> 到主机后按主机命中处理</div>
+      <div class="path">1. unified_tree_core.py:1010    _inc_hit_count_and_check  何时写穿
+2. unified_radix_cache.py:1713  _finish_write_through_ack 写穿完成、写 L3
+3. unified_tree_core.py:1558    evict_device_leaf         降级还是删除
+4. unified_radix_cache.py:1730  load_back                 主机 → GPU
+5. unified_radix_cache.py:1991  prefetch_from_storage     L3 → 主机</div>`;
+    ov.classList.remove('hide');
+  } else ov.classList.add('hide');
+}
+
+/* ---------------- playback ---------------- */
+let cur=0, playing=false, started=false, timer=null, voice=false;
+const bar=$('bar');
+steps.forEach((s,k)=>{ const d=document.createElement('div'); d.title=s.title||(k?'总结':'概览'); d.onclick=()=>{goto(k); if(playing) schedule();}; bar.appendChild(d); });
+const total = steps.reduce((a,s)=>a+s.dur,0);
+function goto(i){
+  cur=Math.max(0,Math.min(steps.length-1,i));
+  init();
+  for(let k=0;k<=cur;k++){ clearTransient(); S.overlay=null; steps[k].act(); }
+  render(cur); updateBar(); speak();
+}
+function updateBar(){
+  [...bar.children].forEach((d,k)=>{ d.className = k<cur?'done':(k===cur?'cur':''); d.style.setProperty('--d', steps[k].dur+'ms'); if(k===cur && !playing) d.classList.add('paused'); });
+  const el = steps.slice(0,cur).reduce((a,s)=>a+s.dur,0)/1000;
+  $('time').textContent = `${fmt(el)} / ${fmt(total/1000)}`;
+  $('bplay').textContent = playing ? '⏸' : '▶';
+}
+function fmt(s){ s=Math.round(s); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+function schedule(){ clearTimeout(timer); timer=setTimeout(advance, steps[cur].dur); }
+function advance(){
+  // 开着朗读时，等这句读完再进入下一步
+  if(voice && speechSynthesis.speaking){ timer=setTimeout(advance, 300); return; }
+  if(cur>=steps.length-1){ playing=false; updateBar(); return; }
+  goto(cur+1); schedule();
+}
+function play(){ started=true; if(cur===steps.length-1) goto(0); if(cur===0) goto(1); playing=true; updateBar(); schedule(); }
+function pause(){ playing=false; clearTimeout(timer); speechSynthesis.cancel(); updateBar(); }
+function toggle(){ playing?pause():play(); }
+function speak(){
+  if(!voice || !('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const txt = steps[cur].cap.replace(/<[^>]+>/g,'').replace(/&[a-z]+;/g,'').replace(/_/g,' ').replace(/−/g,'减').replace(/–/g,'到');
+  const u = new SpeechSynthesisUtterance(txt); u.lang='zh-CN'; u.rate=1.08;
+  const zh = speechSynthesis.getVoices().find(v=>/zh[-_]CN/i.test(v.lang)); if(zh) u.voice=zh;
+  speechSynthesis.speak(u);
+}
+$('bplay').onclick=toggle;
+$('bprev').onclick=()=>{ goto(cur-1); if(playing) schedule(); };
+$('bnext').onclick=()=>{ started=true; goto(cur+1); if(playing) schedule(); };
+$('bvoice').onclick=()=>{ voice=!voice; $('bvoice').textContent = voice?'🔊 朗读':'🔇 朗读'; if(voice) speak(); else speechSynthesis.cancel(); };
+document.addEventListener('keydown',e=>{
+  if(e.code==='Space'){ e.preventDefault(); toggle(); }
+  else if(e.code==='ArrowRight') $('bnext').onclick();
+  else if(e.code==='ArrowLeft') $('bprev').onclick();
+});
+function fit(){ const s=Math.min(innerWidth/1300, innerHeight/800); $('wrap').style.transform=`translate(-50%,-50%) scale(${s})`; }
+addEventListener('resize', fit); fit();
+goto(0);
+</script>
+</body>
+</html>

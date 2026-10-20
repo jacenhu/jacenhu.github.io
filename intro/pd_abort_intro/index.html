@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>传输失败与 abort · SGLang KV Cache 系列 08</title>
+<style>
+  :root{--bg:#0b1020;--panel:#121a2e;--line:#26314d;--text:#e6ebf5;--dim:#8a96b3;--gold:#facc15;--red:#ef4444}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#05070f;color:var(--text);
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;overflow:hidden}
+  #wrap{position:absolute;left:50%;top:50%;width:1280px;height:780px;transform-origin:center center}
+  #stage{position:relative;width:1280px;height:720px;background:var(--bg);border-radius:14px;overflow:hidden;
+    box-shadow:0 20px 60px rgba(0,0,0,.6)}
+  code,.mono{font-family:Menlo,Consolas,monospace}
+  /* top bar */
+  #top{position:absolute;left:24px;right:24px;top:16px;height:44px;display:flex;align-items:center;justify-content:space-between}
+  #stitle{font-size:24px;font-weight:700;letter-spacing:.5px}
+  #stitle .no{color:var(--dim);font-weight:500;margin-right:10px;font-size:18px}
+  #code{font-family:Menlo,Consolas,monospace;font-size:14px;color:#c7d2fe;background:#1e2a4a;border:1px solid #334373;
+    padding:6px 12px;border-radius:8px;transition:opacity .3s}
+  #code:empty{opacity:0}
+  /* config bar */
+  #cfg{position:absolute;left:24px;right:24px;top:66px;height:32px;display:flex;align-items:center;gap:18px;
+    padding:0 16px;background:var(--panel);border:1px solid var(--line);border-radius:10px;font-size:13.5px;transition:all .3s}
+  #cfg b{color:var(--gold);font-weight:600}
+  #cfg b.on{color:#86efac}
+  #cfg .sep{color:#3b4a6e}
+  /* panels */
+  .panel{position:absolute;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;
+    transition:box-shadow .3s,border-color .3s}
+  .panel h3{margin:0 0 8px;font-size:15px;display:flex;justify-content:space-between;align-items:baseline}
+  .panel h3 small{font-size:11.5px;color:var(--dim);font-weight:400}
+  .focus{border-color:#7aa2ff!important;box-shadow:0 0 0 2px rgba(122,162,255,.35),0 0 28px rgba(122,162,255,.25)}
+  #pP{left:24px;top:104px;width:260px;height:488px}
+  #pD{left:480px;top:104px;width:260px;height:488px}
+  #pPoll{left:764px;top:108px;width:492px;height:206px}
+  #pMsg{left:764px;top:326px;width:492px;height:264px}
+  /* request cards */
+  .card{background:#0e1527;border:1px solid #2a3656;border-radius:9px;transition:all .4s;animation:pop .4s ease-out;
+    padding:8px 9px;margin-bottom:12px;height:206px;border-left:4px solid var(--c)}
+  .card.dim{opacity:.25}
+  .card.hl{border-color:var(--gold);border-left-color:var(--c);box-shadow:0 0 16px rgba(250,204,21,.35)}
+  .ctitle{display:flex;align-items:center;gap:7px;margin-bottom:4px}
+  .ctitle .nm{font-size:18px;font-weight:700;color:var(--c)}
+  .ctitle .room{font-family:Menlo,monospace;font-size:11.5px;color:var(--dim)}
+  .chip{margin-left:auto;font-family:Menlo,monospace;font-size:11px;font-weight:700;padding:2px 7px;border-radius:6px;
+    color:#fff;background:color-mix(in srgb,var(--s) 45%,transparent);border:1px solid var(--s);transition:all .4s}
+  .chip.none{background:transparent;border:1px dashed #3b4a6e;color:var(--dim);font-weight:400}
+  .csub{font-size:11.5px;color:var(--dim);margin-bottom:8px}
+  .pages{display:flex;gap:8px;margin-bottom:9px}
+  .cell{flex:1;height:56px;border-radius:7px;border:1px solid #26314d;background:#0b1121;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:3px;transition:all .4s;color:#64748b}
+  .cell .ix{font-family:Menlo,monospace;font-size:13px;font-weight:700}
+  .cell .tg{font-size:10.5px}
+  .cell.kv{border:1.5px solid var(--c);background:color-mix(in srgb,var(--c) 30%,transparent);color:#fff}
+  .cell.sent,.cell.recv{border:1.5px solid var(--c);background:color-mix(in srgb,var(--c) 50%,transparent);color:#fff}
+  .cell.recv{animation:land .6s ease-out}
+  .cell.alloc{border:1.5px dashed var(--c);color:var(--c);background:color-mix(in srgb,var(--c) 8%,transparent)}
+  .cell.fail{border:1.5px solid var(--red);background:rgba(239,68,68,.25);color:#fecaca;animation:blink 1s ease-in-out 2}
+  .cell.drop{border:1.5px dashed var(--red);color:#fca5a5;background:transparent}
+  .cell.free{opacity:.35;border-style:dotted;color:#94a3b8}
+  .cell.hold{border:1.5px solid var(--gold);background:rgba(250,204,21,.12);color:var(--gold)}
+  .cell.inflight{border:1.5px solid var(--gold);background:color-mix(in srgb,var(--c) 40%,transparent);color:#fff;animation:blink 1s ease-in-out infinite}
+  .cfoot{font-family:Menlo,monospace;font-size:11px;line-height:1.55;color:#a5b4d4;white-space:pre}
+  .cfoot .r{color:#fca5a5}.cfoot .g{color:#86efac}.cfoot .y{color:var(--gold)}
+  @keyframes land{0%{transform:scale(1.25);filter:brightness(1.8)}100%{transform:none;filter:none}}
+  @keyframes blink{50%{box-shadow:0 0 0 2px var(--red),0 0 16px rgba(239,68,68,.6)}}
+  @keyframes pop{from{transform:scale(.9);opacity:0}to{transform:scale(1);opacity:1}}
+  /* KVPoll strip */
+  #poll{display:flex;gap:6px}
+  .pst{flex:none;display:flex;flex-direction:column;gap:6px}
+  .pst:nth-child(1){width:66px}.pst:nth-child(2){width:98px}.pst:nth-child(3){width:112px}.pst:nth-child(4){width:92px}.pst:nth-child(5){width:70px}
+  .pbox{border:1.5px solid var(--s);border-radius:8px;padding:5px 4px;text-align:center;background:color-mix(in srgb,var(--s) 12%,transparent)}
+  .pbox .n{font-family:Menlo,monospace;font-size:11px;font-weight:700;color:#fff}
+  .pbox .v{font-family:Menlo,monospace;font-size:11px;color:var(--dim)}
+  .pbox.act{background:color-mix(in srgb,var(--s) 38%,transparent);box-shadow:0 0 12px color-mix(in srgb,var(--s) 60%,transparent)}
+  .tags{min-height:44px;display:flex;flex-wrap:wrap;gap:3px;justify-content:center;align-content:flex-start}
+  .tag{font-family:Menlo,monospace;font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:5px;color:#fff;
+    background:color-mix(in srgb,var(--c) 45%,transparent);border:1px solid var(--c);animation:pop .35s ease-out;white-space:nowrap}
+  #prule{margin-top:6px;font-size:12px;line-height:1.55;color:#c7d2fe}
+  #prule b{color:var(--gold);font-weight:600}
+  /* note */
+  #note{font-family:Menlo,Consolas,monospace;font-size:12px;line-height:1.58;white-space:pre;color:#dbe4ff;animation:fadein .45s ease-out}
+  #note .c{color:var(--dim)}
+  #note .y{color:var(--gold)}
+  #note .g{color:#86efac}
+  #note .r{color:#fca5a5}
+  .ph{font-size:12.5px;color:var(--dim);font-style:italic}
+  /* arrows */
+  #arrows{position:absolute;inset:0;pointer-events:none;z-index:5}
+  #arrows .flow{stroke-dasharray:7 5;animation:flow .8s linear infinite}
+  #arrows .msg{animation:flow 1.2s linear infinite;stroke-dasharray:10 4}
+  #arrows .dim{opacity:.18}
+  @keyframes flow{to{stroke-dashoffset:-24}}
+  /* caption */
+  #cap{position:absolute;left:24px;right:24px;top:602px;height:104px;display:flex;align-items:center;justify-content:center;
+    text-align:center;font-size:20px;line-height:1.55;padding:0 30px;background:linear-gradient(180deg,rgba(18,26,46,.9),rgba(18,26,46,.6));
+    border:1px solid var(--line);border-radius:12px}
+  #cap span{animation:fadein .5s ease-out}
+  #cap em{font-style:normal;color:var(--gold)}
+  #cap code{font-size:17px;color:#c7d2fe}
+  @keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  /* overlay */
+  #ov{position:absolute;inset:0;background:radial-gradient(ellipse at center,#16224a 0%,#0b1020 70%);display:flex;flex-direction:column;
+    align-items:center;justify-content:center;transition:opacity .6s;z-index:10}
+  #ov.hide{opacity:0;pointer-events:none}
+  #ov h1{font-size:50px;margin:0 0 14px;letter-spacing:2px}
+  #ov h2{font-size:22px;font-weight:400;color:var(--dim);margin:0 0 34px}
+  #ov .big{font-size:18px;padding:12px 30px;border-radius:30px;background:#4f8cff;color:#fff;border:none;cursor:pointer}
+  #ov .sum{font-size:21px;line-height:2;text-align:center}
+  #ov .sum b{color:var(--gold)}
+  #ov .path{margin-top:22px;font-family:Menlo,monospace;font-size:15px;color:#c7d2fe;background:#121a2e;border:1px solid var(--line);
+    padding:14px 22px;border-radius:10px;line-height:1.9;white-space:pre}
+  #ov .path .c{color:var(--dim)}
+  /* controls */
+  #ctrl{position:absolute;left:0;right:0;top:732px;height:44px;display:flex;align-items:center;gap:12px;padding:0 6px}
+  #ctrl button{background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;min-width:40px;
+    font-size:15px;cursor:pointer;padding:0 10px}
+  #ctrl button:hover{background:#26325a}
+  #ctrl a.home{display:flex;align-items:center;background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;padding:0 10px;font-size:13px;text-decoration:none;white-space:nowrap}
+  #ctrl a.home:hover{background:#26325a}
+  #bar{flex:1;display:flex;gap:3px;height:10px;cursor:pointer}
+  #bar div{flex:1;background:#232d4b;border-radius:3px;position:relative;overflow:hidden}
+  #bar div.done{background:#4f8cff}
+  #bar div.cur::after{content:'';position:absolute;left:0;top:0;bottom:0;background:#4f8cff;animation:fill var(--d) linear forwards}
+  #bar div.cur.paused::after{animation-play-state:paused}
+  @keyframes fill{from{width:0}to{width:100%}}
+  #time{font-size:13px;color:var(--dim);width:64px;text-align:right}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <div id="top"><div id="stitle"></div><div id="code"></div></div>
+    <div id="cfg"></div>
+
+    <div class="panel" id="pP"><h3>① Prefill rank 0 <small>算 KV，发给 D0</small></h3><div id="pcards"></div></div>
+    <div class="panel" id="pD"><h3>④ Decode rank 0 <small>预分配页、被写入</small></h3><div id="dcards"></div></div>
+    <div class="panel" id="pPoll"><h3>② KVPoll 状态 <small>每个 room 在 P、D 各一份</small></h3><div id="poll"></div><div id="prule"></div></div>
+    <div class="panel" id="pMsg"><h3>③ 消息与判定 <small>P ↔ D 之间发了什么、代码怎么判</small></h3><div id="note"></div></div>
+
+    <svg id="arrows" viewBox="0 0 1280 720" width="1280" height="720"><defs id="adefs"></defs><g id="ag"></g></svg>
+
+    <div id="cap"></div>
+    <div id="ov"></div>
+  </div>
+
+  <div id="ctrl">
+    <a class="home" href="../index.html" title="返回目录">☰ 目录</a>
+    <button id="bprev" title="上一步 (←)">⏮</button>
+    <button id="bplay" title="自动演示/暂停 (空格)">▶</button>
+    <button id="bnext" title="下一步 (→)">⏭</button>
+    <div id="bar"></div>
+    <div id="time"></div>
+    <button id="bvoice" title="中文语音朗读">🔇 朗读</button>
+  </div>
+</div>
+
+<script>
+// KVPoll（disaggregation/base/conn.py:103）
+const KV = ['Failed','Bootstrapping','WaitingForInput','Transferring','Success'];
+const F=0, BOOT=1, WAIT=2, XFER=3, OK=4;
+const SC = ['#ef4444','#64748b','#38bdf8','#a78bfa','#22c55e'];   // 每个状态一种颜色
+const RC = {A:'#4f8cff', B:'#f59e0b', C:'#ec4899', E:'#14b8a6'};   // 每个请求一种颜色
+
+function mkReq(name, room, pidx, didx){
+  return {name, room, c:RC[name], pidx, didx, pst:null, dst:null,
+          pp:['','',''], dp:['','',''], pfoot:'', dfoot:''};
+}
+let S;
+function init(){
+  S = {
+    deferred:false,
+    R:[mkReq('A','0x2a',[12,13,14],[3,4,5]), mkReq('B','0x2b',[20,21,22],[6,7,8])],
+    dimCards:false,
+    overlay:null,
+  };
+  clearTransient();
+}
+function clearTransient(){ S.focus=[]; S.hlCards=[]; S.arrows=[]; S.note=''; S.tagsOverride=null; S.actState=null; }
+
+// ---- 小工具 ----
+const A = () => S.R[0], B = () => S.R[1];
+function setAll(st){ S.R.forEach(r=>{ r.pst=st; r.dst=st; }); }
+function chunk1Sent(){ S.R.forEach(r=>{ r.pp=['sent','sent','']; r.dp=['recv','recv','alloc']; }); }
+// RDMA：P 页 → D 页
+function rdma(ri, pages, kind){ return pages.map(j=>({type:'cell', from:`p${ri}-${j}`, fromCard:`pc${ri}`, to:`d${ri}-${j}`, toCard:`dc${ri}`,
+                                                    color:S.R[ri].c, kind:kind||'flow'})); }
+// 控制消息：dir 'pd' = P→D，'dp' = D→P；dy 为相对卡片顶部的纵向偏移
+function msg(ri, dir, label, color, dy){ return {type:'msg', ri, dir, label, color:color||'#cbd5e1', dy:dy||40, kind:'msg'}; }
+
+const steps = [
+ { title:'', code:'', dur:5000,
+   cap:'KV 传到一半出错、或用户中途取消，P、D 两侧的状态怎么变？<em>预分配的页何时还回去</em>？',
+   act(){ S.overlay='title'; } },
+
+ { title:'登场角色', code:'mooncake/lifecycle.py:23  requires_abort_drain', dur:10000,
+   cap:'请求 A、B 走<em>同一条 Mooncake session</em>（P0→D0）。本篇讲默认路径 <em>requires_abort_drain=False</em>。',
+   act(){
+     S.note=`<span class="c"># !116 把默认 PD 路径恢复成 !83 之前的协议</span>
+requires_abort_drain = <span class="y">False</span>
+→ 失败按 session 拉黑（failed_sessions）
+→ ABORT 4 帧、ABORT_ACK 2 帧，不带 epoch
+
+<span class="c"># 下面这些机制在默认路径都不生效：</span>
+<span class="c">#   epoch 绑定的 ABORT / ACK</span>
+<span class="c">#   source_release_ready 门控、instance drain</span>`;
+     S.focus=['pP','pD','pMsg']; } },
+
+ { title:'KVPoll：五个状态，只升不降', code:'base/conn.py:103  KVPoll', dur:10000,
+   cap:'每个 room 在 P、D 两侧各有一份 <em>KVPoll</em>，从 Bootstrapping 起步，数值越大越靠后，<em>Failed=0 最小</em>。',
+   act(){ setAll(BOOT);
+     S.note=`<span class="c"># common/conn.py:397  update_status</span>
+if status == Failed:  写入 Failed; return
+if current == Failed: return       <span class="c"># 终态</span>
+request_status[room] = max(current, status)
+
+<span class="c"># 例：WaitingForInput(2) 再收到 Bootstrapping(1)</span>
+<span class="c">#     → 仍是 2，不会倒退</span>
+<span class="c"># 例：Failed(0) 再收到 Success(4) → 仍是 0</span>`;
+     S.focus=['pPoll','pMsg']; } },
+
+ { title:'D 预分配，元数据到齐', code:'decode.py:1635  send_metadata', dur:11000,
+   cap:'D 为 A、B 各预分配 <em>3 页</em>并发元数据；P 收齐后，两侧都到 <em>WaitingForInput</em>。',
+   act(){ setAll(WAIT);
+     S.R.forEach(r=>{ r.dp=['alloc','alloc','alloc']; r.dfoot=`预分配 [${r.didx.join(', ')}]`; });
+     S.arrows=[msg(0,'dp','metadata','#94a3b8'), msg(1,'dp','metadata','#94a3b8')];
+     S.note=`D：A → 页 <span class="y">[3, 4, 5]</span>    B → 页 <span class="y">[6, 7, 8]</span>
+send_metadata(page_indices, ...) → P 的 bootstrap_thread
+
+<span class="c"># mooncake/conn.py:2511</span>
+if len(transfer_infos[room]) == required_dst_info_num:
+    update_status(room, WaitingForInput)
+<span class="c"># P TP = D TP = 2 → required_dst_info_num = 1</span>`;
+     S.focus=['pD','pPoll']; } },
+
+ { title:'第一段 KV 正常写入', code:'prefill.py:1299  send_kv_chunk', dur:10000,
+   cap:'P 算完第一段，<code>send_kv_chunk</code> 把 A、B 的<em>前 2 页</em>交给传输线程，RDMA 直接写进 D 的预分配页。',
+   act(){ setAll(WAIT); chunk1Sent();
+     S.R.forEach(r=>{ r.dfoot=`预分配 [${r.didx.join(', ')}]`; r.pfoot='chunk1 <span class="g">✓</span>  chunk2 未算'; });
+     S.arrows=[...rdma(0,[0,1]), ...rdma(1,[0,1])];
+     S.note=`send_kv_chunk → add_transfer_request → 队列
+transfer_worker：send_kvcache(...) → ret = <span class="g">0</span>
+A：P[12, 13] → D[3, 4]     B：P[20, 21] → D[6, 7]
+<span class="c"># 不是最后一段：不发 aux，不发状态</span>
+
+<span class="c"># Mooncake 默认路径不置 Transferring，</span>
+<span class="c"># 两侧仍是 WaitingForInput（prefill.py:1004 todo）</span>`;
+     S.focus=['pP','pD']; } },
+
+ { title:'用户取消 B', code:'managers/scheduler.py:5421  abort_request', dur:10000,
+   cap:'用户取消 B。D 的 B 还在传输队列里，<code>receiver.abort()</code> 先把 <em>D 侧状态置 Failed</em>。',
+   act(){ setAll(WAIT); chunk1Sent(); B().dst=F; A().pfoot=B().pfoot='chunk1 <span class="g">✓</span>  chunk2 未算';
+     S.R.forEach(r=>r.dfoot=`预分配 [${r.didx.join(', ')}]`); B().dfoot='<span class="r">AbortReq</span>';
+     S.hlCards=['dc1'];
+     S.note=`<span class="c"># 遍历 Decode 传输队列</span>
+for decode_req in disagg_decode_transfer_queue.queue:
+    receiver.abort()
+
+<span class="c"># CommonKVReceiver.abort（common/conn.py:1893）</span>
+record_failure(room, "Aborted by AbortReq.")
+update_status(room, Failed)    → D·B = <span class="r">Failed</span>`;
+     S.focus=['pD','pPoll']; } },
+
+ { title:'D 发出 ABORT', code:'common/conn.py:1908  _send_abort_notification', dur:9000,
+   cap:'D 向 B 的每个 P 端点发 <em>ABORT</em>（room + 回信地址），best-effort，发失败只记日志。',
+   act(){ setAll(WAIT); chunk1Sent(); B().dst=F; A().pfoot=B().pfoot='chunk1 <span class="g">✓</span>  chunk2 未算';
+     S.R.forEach(r=>r.dfoot=`预分配 [${r.didx.join(', ')}]`); B().dfoot='<span class="r">AbortReq</span>';
+     S.arrows=[msg(1,'dp','ABORT 0x2b','#fca5a5')];
+     S.note=`<span class="c"># 默认路径 4 帧，room 0x2b = 43</span>
+[b"ABORT", b"43", local_ip, rank_port]
+
+<span class="c"># bound 模式（requires_abort_drain=True）</span>
+<span class="c"># 另加 session_id、aux_epoch 共 6 帧</span>
+<span class="c"># （mooncake/conn.py:2966，默认不走）</span>`;
+     S.focus=['pMsg']; } },
+
+ { title:'P 置 Failed，立即回 ACK', code:'mooncake/conn.py:2383  bootstrap_thread', dur:11000,
+   cap:'P 收到 ABORT：room 还没 Success，就<em>置 Failed</em>，并<em>立刻</em>回 ABORT_ACK，不等在途写入结束。',
+   act(){ setAll(WAIT); chunk1Sent(); B().dst=F; B().pst=F; A().pfoot=B().pfoot='chunk1 <span class="g">✓</span>  chunk2 未算';
+     S.R.forEach(r=>r.dfoot=`预分配 [${r.didx.join(', ')}]`); B().dfoot='<span class="r">AbortReq</span>';
+     S.arrows=[msg(1,'dp','ABORT','#fca5a5',34), msg(1,'pd','ABORT_ACK','#86efac',60)];
+     S.hlCards=['pc1'];
+     S.note=`room_active = room in request_status
+              and check_status(room) != Success
+<span class="c"># B 是 WaitingForInput(2) → True</span>
+if room_active: update_status(room, Failed)
+
+send [b"ABORT_ACK", b"43"]     <span class="c"># 2 帧，立即发</span>
+<span class="c"># 默认 enable_deferred_decode_kv_release = False</span>`;
+     S.focus=['pP','pPoll']; } },
+
+ { title:'B 的最后一段被丢弃', code:'mooncake/conn.py:2626  add_transfer_request', dur:9000,
+   cap:'P 算完 B 的最后一段，<code>add_transfer_request</code> 发现 room 已 Failed，<em>直接返回</em>，不再入队。',
+   act(){ setAll(WAIT); chunk1Sent(); B().dst=F; B().pst=F;
+     A().pfoot='chunk1 <span class="g">✓</span>  chunk2 未算'; B().pp=['sent','sent','drop']; B().pfoot='chunk1 <span class="g">✓</span>  chunk2 <span class="r">丢弃</span>';
+     S.R.forEach(r=>r.dfoot=`预分配 [${r.didx.join(', ')}]`); B().dfoot='<span class="r">AbortReq</span>';
+     S.hlCards=['pc1'];
+     S.note=`if room not in request_status
+   or check_status(room) == Failed:
+    return            <span class="c"># "already failed"</span>
+
+<span class="c"># 已经在队列里的 chunk：transfer_worker 跳过</span>
+<span class="c"># "Skipping chunk ... already failed"（:2038）</span>`;
+     S.focus=['pP']; } },
+
+ { title:'两侧释放 B', code:'decode.py:2572  pop_transferred', dur:11000,
+   cap:'D 轮询到 B 为 Failed，默认路径<em>立即</em>把 3 个预分配页还回去；收到的 ABORT_ACK <em>不参与</em>释放判断。',
+   act(){ setAll(WAIT); chunk1Sent(); B().dst=F; B().pst=F;
+     A().pfoot='chunk1 <span class="g">✓</span>  chunk2 未算';
+     A().dfoot='预分配 [3, 4, 5]';
+     B().pp=['free','free','free']; B().pfoot='已释放';
+     B().dp=['free','free','free']; B().dfoot='已释放 · is_insert=False';
+     S.hlCards=['dc1'];
+     S.note=`pop_transferred：poll == Failed
+  prepare_abort(req, ..., 500)
+  release_kv_cache(req, tree_cache, is_insert=False)
+  <span class="c"># 不插入 radix tree，3 页直接空闲</span>
+
+decode_thread 收到 ABORT_ACK（mooncake/conn.py:2569）
+  <span class="c"># 两个开关都关 → 直接 continue</span>
+P：inflight 队列 poll 到 Failed → 释放 P 侧页`;
+     S.focus=['pD','pP']; } },
+
+ { title:'A 的第二段：RDMA 返回 -1', code:'mooncake/conn.py:2219  transfer_worker', dur:11000,
+   cap:'再看 A：最后一段 RDMA <em>返回 -1</em>。P 给这条 session 记一次失败，<em>失败一次就拉黑</em>。',
+   act(){ setAll(WAIT); S.R[1]=mkReq('B','0x2b',[20,21,22],[6,7,8]); S.dimCards=false;
+     B().pst=null; B().dst=null; B().pfoot='已结束'; B().dfoot='已结束';
+     A().pp=['sent','sent','fail']; A().dp=['recv','recv','alloc'];
+     A().pfoot='chunk1 <span class="g">✓</span>  chunk2 <span class="r">ret=-1</span>'; A().dfoot='预分配 [3, 4, 5]';
+     S.arrows=[{...rdma(0,[2])[0], color:'#ef4444'}];
+     S.hlCards=['pc0'];
+     S.note=`<span class="c"># sid = D0 这个 rank 的 mooncake session</span>
+ret = send_kvcache(sid, ...)     → <span class="r">-1</span>
+session_failures[sid] += 1       → <span class="y">1</span>
+if session_failures[sid] >= 1:   <span class="c"># 一次就拉黑</span>
+    failed_sessions.add(sid)
+    logger.error("Session {sid} failed.")
+conclude_failure(bootstrap_room=0x2a, ...)`;
+     S.focus=['pP','pMsg']; } },
+
+ { title:'把 Failed 推给 D', code:'common/conn.py:556  conclude_failure', dur:10000,
+   cap:'<code>conclude_failure</code> 记原因、本侧置 Failed，再把 <em>Failed + 原因</em>推给 D，D 也置 Failed。',
+   act(){ A().pst=F; A().dst=F; B().pst=null; B().dst=null; B().pfoot='已结束'; B().dfoot='已结束';
+     A().pp=['sent','sent','fail']; A().dp=['recv','recv','alloc'];
+     A().pfoot='chunk1 <span class="g">✓</span>  chunk2 <span class="r">ret=-1</span>'; A().dfoot='预分配 [3, 4, 5]';
+     S.arrows=[msg(0,'pd','Failed + 原因','#fca5a5',40)];
+     S.note=`failure_records[42] = "Failed to send kv chunk
+                       of 42 to &lt;D0 ip:port&gt;"
+update_status(42, Failed)        → P·A = <span class="r">Failed</span>
+send_kv_status_message(targets, Failed, reason)
+
+D：apply_prefill_status(status=Failed)
+   record_failure → update_status(Failed)
+                                 → D·A = <span class="r">Failed</span>`;
+     S.focus=['pMsg','pPoll']; } },
+
+ { title:'多 rank：取 MIN', code:'disaggregation/utils.py:234  _all_reduce_polls', dur:11000,
+   cap:'TP2 里只有 rank 0 的写入失败。各 rank 先<em>取 MIN</em> 再处理：Failed=0 最小，<em>rank 1 也按失败收尾</em>。',
+   act(){ A().pst=F; A().dst=F; B().pst=null; B().dst=null; B().pfoot='已结束'; B().dfoot='已结束';
+     A().pp=['sent','sent','fail']; A().dp=['recv','recv','alloc'];
+     A().pfoot='chunk1 <span class="g">✓</span>  chunk2 <span class="r">ret=-1</span>'; A().dfoot='预分配 [3, 4, 5]';
+     S.tagsOverride={0:[['P0·A 本地','#4f8cff'],['MIN 结果','#facc15']], 4:[['P1·A 本地','#4f8cff']]};
+     S.actState=F;
+     S.note=`<span class="c"># P 侧 A 的本地状态（attn_tp 组）</span>
+rank 0: Failed(0)       rank 1: Success(4)
+all_reduce(MIN) → [0] → 两个 rank 都看到 <span class="r">Failed</span>
+
+rank 1 没有本地失败原因：
+  failure_exception → KVTransferError(
+    "Failed due to an unknown reason from
+     another rank", is_from_another_rank=True)
+<span class="c"># 传播来的错误只打 debug 日志，避免重复</span>`;
+     S.focus=['pPoll','pMsg']; } },
+
+ { title:'两侧收尾，返回 500', code:'prefill.py:1063  handle_inflight_transfer_failure', dur:11000,
+   cap:'两侧各自收尾：P 释放 A 的 KV，D 还回 3 个预分配页，请求以 <em>HTTP 500</em> 结束。',
+   act(){ A().pst=F; A().dst=F; B().pst=null; B().dst=null; B().pfoot='已结束'; B().dfoot='已结束';
+     A().pp=['free','free','free']; A().dp=['free','free','free'];
+     A().pfoot='已释放'; A().dfoot='已释放 · is_insert=False';
+     S.hlCards=['pc0','dc0'];
+     S.note=`P：failure_exception()  → KVTransferError
+   release_kv_cache(req, tree_cache)   <span class="c"># 解锁 tree</span>
+   prepare_abort(req, msg, status_code=500)
+
+D：pop_transferred 走和 B 相同的分支
+   prepare_abort(req, msg, status_code=500)
+   release_kv_cache(req, tree_cache, is_insert=False)`;
+     S.focus=['pP','pD']; } },
+
+ { title:'黑名单波及同 session', code:'mooncake/conn.py:2078  transfer_worker', dur:11000,
+   cap:'黑名单按 session 生效：之后发往 D0 的<em>新请求 C</em> 在 worker 里直接失败，直到 D0 <em>重新注册</em>。',
+   act(){ A().pst=null; A().dst=null; A().pp=['free','free','free']; A().dp=['free','free','free']; A().pfoot='已结束'; A().dfoot='已结束';
+     S.R[1]=mkReq('C','0x2c',[30,31,32],[9,10,11]);
+     const C=S.R[1]; C.pst=F; C.dst=F; C.pp=['kv','kv','']; C.pfoot='chunk1 <span class="r">早退</span>';
+     C.dp=['alloc','alloc','alloc']; C.dfoot='预分配 [9, 10, 11]';
+     S.arrows=[msg(1,'pd','Failed（未写入）','#fca5a5',40)];
+     S.hlCards=['pc1'];
+     S.note=`if sid in failed_sessions:
+    conclude_failure(room=0x2c, "Decode instance could
+      be dead, remote mooncake session ... not alive")
+
+恢复途径：
+  D 再发 KVArgs 注册（room == "None"）→ discard（:2475）
+  可选探活 SGLANG_ENABLE_FAILED_SESSION_PROBE
+    _run_one_probe_pass：probe 成功即解除（:2674）`;
+     S.focus=['pP','pMsg']; } },
+
+ { title:'边界：ABORT 来晚了', code:'mooncake/conn.py:2387  bootstrap_thread', dur:9000,
+   cap:'ABORT 到达时 P 侧已 <em>Success</em>：P <em>不改状态</em>，照样回 ACK；D 侧仍按 Failed 释放。',
+   act(){ S.R[0]=mkReq('E','0x2e',[40,41,42],[12,13,14]); S.R[1]=mkReq('B','0x2b',[20,21,22],[6,7,8]);
+     S.dimCards=false; const E=S.R[0];
+     E.pst=OK; E.dst=F; E.pp=['sent','sent','sent']; E.dp=['recv','recv','recv'];
+     E.pfoot='全部发完 <span class="g">Success</span>'; E.dfoot='<span class="r">AbortReq</span>（已收齐）';
+     B().pfoot=''; B().dfoot='';
+     S.hidden=[1];
+     S.arrows=[msg(0,'dp','ABORT','#fca5a5',34), msg(0,'pd','ABORT_ACK','#86efac',60)];
+     S.note=`room_active = room in request_status
+              and check_status(room) != Success
+<span class="c"># E 已 Success(4) → False</span>
+log "ignoring (already completed or unknown)"
+仍发送 [b"ABORT_ACK", b"46"]
+
+D：receiver.abort() → update_status(Failed)
+   <span class="c"># Failed 无条件写入，Success 也会被覆盖</span>`;
+     S.focus=['pP','pPoll']; } },
+
+ { title:'边界：释放过早 → 延迟释放', code:'common/conn.py:680  register_deferred_ack_target', dur:12000,
+   cap:'默认路径 P 回 ACK 时，在途 RDMA 可能<em>还在写</em> D 页。开启延迟释放后，D <em>等 ACK</em> 再还页。',
+   act(){ S.deferred=true; S.hidden=[0];
+     const b=B(); b.pst=F; b.dst=F; b.pp=['sent','sent','inflight']; b.dp=['recv','recv','hold'];
+     b.pfoot='chunk2 <span class="y">在途</span>  outstanding=1'; b.dfoot='<span class="y">保留</span>：等 ABORT_ACK';
+     S.arrows=[{...rdma(1,[2])[0], color:'#facc15'}, msg(1,'pd','ACK（排空后）','#86efac',36)];
+     S.note=`SGLANG_DISAGGREGATION_DEFERRED_DECODE_KV_RELEASE=1
+P：先 update_status(Failed)，再登记 ACK 目标
+   <span class="c"># 顺序反了：新 chunk 可能写进已释放页</span>
+   outstanding == 0 才回 [ABORT_ACK, room, rank]
+D：_defer_release 保留页，ACK 收齐或 30 s 超时再放
+
+<span class="c"># bound 模式（requires_abort_drain=True）另有：</span>
+<span class="c"># !111 abort 按 room 隔离</span>
+<span class="c"># !113 仅原生 WRITE 失败才触发 drain</span>`;
+     S.focus=['pD','pMsg']; } },
+
+ { title:'边界：启动时注册失败', code:'mooncake/conn.py:376  _batch_register_or_raise', dur:9000,
+   cap:'有的失败应在启动时暴露：显存 <em>batch_register 失败</em>就直接抛错中止（!125），不再带着写不进的 KV 上线。',
+   act(){ S.deferred=false; S.dimCards=true; S.hidden=[];
+     S.note=`ret = engine.batch_register(ptrs, lens)
+if ret != 0:
+    raise RuntimeError("Mooncake failed to register
+                        N memory region(s) ...")
+
+<span class="c"># 否则对端永远写不进本实例的 KV（源码注释）</span>
+<span class="c"># 排查：GPUDirect RDMA / nvidia_peermem / dma-buf</span>`;
+     S.focus=['pMsg']; } },
+
+ { title:'', code:'', dur:13000,
+   cap:'沿着这 5 个位置打断点，用同一个 bootstrap_room 把 P、D 两侧的日志串起来看。',
+   act(){ S.overlay='summary'; } },
+];
+
+/* ---------------- render ---------------- */
+const $ = id => document.getElementById(id);
+const PTAG = {sent:'已发 ✓', kv:'已算', fail:'✗ -1', drop:'丢弃', free:'已释放', inflight:'在途', '':''};
+const DTAG = {recv:'已写入', alloc:'预分配', free:'空闲', hold:'保留', '':''};
+
+function chip(st){
+  return st==null ? `<span class="chip none">—</span>` : `<span class="chip" style="--s:${SC[st]}">${KV[st]}</span>`;
+}
+function cardHTML(side, ri){
+  const r=S.R[ri], P=side==='p';
+  const hidden=(S.hidden||[]).includes(ri);
+  const pages=(P?r.pidx:r.didx).map((ix,j)=>{
+    const st=P?r.pp[j]:r.dp[j];
+    return `<div class="cell ${st}" id="${side}${ri}-${j}"><span class="ix">${ix}</span><span class="tg">${(P?PTAG:DTAG)[st]||''}</span></div>`;
+  }).join('');
+  const sub = P ? `session → D0 · KV 页（P 侧）` : `预分配页（D 侧）`;
+  const cls = `card${(S.dimCards||hidden)?' dim':''}${S.hlCards.includes((P?'pc':'dc')+ri)?' hl':''}`;
+  return `<div class="${cls}" id="${P?'pc':'dc'}${ri}" style="--c:${r.c}">
+    <div class="ctitle"><span class="nm">${r.name}</span><span class="room">room ${r.room}</span>${chip(P?r.pst:r.dst)}</div>
+    <div class="csub">${sub}</div><div class="pages">${pages}</div>
+    <div class="cfoot">${P?r.pfoot:r.dfoot}</div></div>`;
+}
+function pollHTML(){
+  const tags={0:[],1:[],2:[],3:[],4:[]};
+  if(S.tagsOverride){ Object.entries(S.tagsOverride).forEach(([k,v])=>tags[k]=v); }
+  else S.R.forEach((r,ri)=>{ if((S.hidden||[]).includes(ri)||S.dimCards) return;
+    if(r.pst!=null) tags[r.pst].push(['P·'+r.name, r.c]);
+    if(r.dst!=null) tags[r.dst].push(['D·'+r.name, r.c]); });
+  return KV.map((n,v)=>{
+    const act = S.actState===v || (!S.tagsOverride && tags[v].length>0);
+    return `<div class="pst"><div class="pbox${act?' act':''}" style="--s:${SC[v]}"><div class="n">${n}</div><div class="v">= ${v}</div></div>
+      <div class="tags">${tags[v].map(([t,c])=>`<span class="tag" style="--c:${c}">${t}</span>`).join('')}</div></div>`;
+  }).join('');
+}
+function cfgHTML(){
+  return `<span>Mooncake</span><span class="sep">|</span><span>Prefill <b>TP=2</b> → Decode <b>TP=2</b>（只画 rank 0）</span>`+
+    `<span class="sep">|</span><span>requires_abort_drain = <b>False</b></span>`+
+    `<span class="sep">|</span><span>DEFERRED_DECODE_KV_RELEASE = ${S.deferred?'<b class="on">True（手动开启）</b>':'<b>False</b>'}</span>`;
+}
+
+/* ---- arrows ---- */
+const stage=$('stage');
+function rel(el){
+  const st=stage.getBoundingClientRect(), r=el.getBoundingClientRect(), k=st.width/1280;
+  return {l:(r.left-st.left)/k, r:(r.right-st.left)/k, t:(r.top-st.top)/k, b:(r.bottom-st.top)/k,
+          cy:((r.top+r.bottom)/2-st.top)/k};
+}
+const markers=new Set();
+function marker(color){
+  const id='m'+color.slice(1);
+  if(!markers.has(id)){
+    markers.add(id);
+    $('adefs').insertAdjacentHTML('beforeend',
+      `<marker id="${id}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+       <path d="M0,0 L10,5 L0,10 z" fill="${color}"/></marker>`);
+  }
+  return id;
+}
+function drawArrows(){
+  let h='';
+  (S.arrows||[]).forEach(a=>{
+    let x1,y1,x2,y2;
+    if(a.type==='msg'){
+      const p=rel($('pc'+a.ri)), d=rel($('dc'+a.ri));
+      const y=p.t+a.dy;
+      if(a.dir==='pd'){ x1=p.r; x2=d.l; } else { x1=d.l; x2=p.r; }
+      y1=y2=y;
+    } else {
+      const f=rel($(a.from)), t=rel($(a.to));
+      x1=rel($(a.fromCard)).r; y1=f.cy; x2=rel($(a.toCard)).l; y2=t.cy;
+    }
+    const dx=(x2-x1)*.45;
+    const d=`M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2-(x2>x1?2:-2)},${y2}`;
+    h += `<path d="${d}" fill="none" stroke="${a.color}" stroke-width="2" class="${a.kind}" marker-end="url(#${marker(a.color)})"/>`;
+    if(a.label) h += `<text x="${(x1+x2)/2}" y="${(y1+y2)/2-7}" fill="${a.color}" font-size="12.5" font-weight="700" text-anchor="middle" font-family="Menlo,monospace">${a.label}</text>`;
+  });
+  $('ag').innerHTML=h;
+}
+
+function render(i){
+  const st=steps[i];
+  $('stitle').innerHTML = st.title ? `<span class="no">${String(i).padStart(2,'0')}</span>${st.title}` : '';
+  $('code').textContent = st.code;
+  $('cap').innerHTML = `<span>${st.cap}</span>`;
+  $('cfg').innerHTML = cfgHTML();
+  $('pcards').innerHTML = [0,1].map(ri=>cardHTML('p',ri)).join('');
+  $('dcards').innerHTML = [0,1].map(ri=>cardHTML('d',ri)).join('');
+  $('poll').innerHTML = pollHTML();
+  $('prule').innerHTML = `update_status：<b>Failed 直接写入且为终态</b>；其余 max(当前, 新值)，只升不降<br>
+    多 rank 之间先 <b>MIN 归约</b>：Failed=0 最小，最先传播`;
+  const n=$('note'); n.innerHTML = S.note || '<span class="ph">消息和判定逻辑显示在这里。</span>';
+  n.style.animation='none'; void n.offsetWidth; n.style.animation='';
+  ['pP','pD','pPoll','pMsg'].forEach(id=>$(id).classList.toggle('focus', S.focus.includes(id)));
+  drawArrows();
+
+  const ov=$('ov');
+  if(S.overlay==='title'){
+    ov.innerHTML = `<h1>PD 传输失败与 abort</h1><h2>SGLang KV Cache 系列 08 · Mooncake 默认路径 · 约 3 分钟</h2>`+
+      (started ? '' : `<button class="big" onclick="play()">▶ 开始演示</button>`);
+    ov.classList.remove('hide');
+  } else if(S.overlay==='summary'){
+    ov.innerHTML = `<h1 style="font-size:40px">一句话记住</h1>
+      <div class="sum">传输失败：一侧置 <b>Failed</b>（终态，跨 rank 取 MIN 传播），两侧各自释放、返回 500<br>
+      abort：D 发 <b>ABORT</b>，P 置 Failed 并<b>立即 ACK</b>；默认路径 D <b>不等 ACK</b> 就还页</div>
+      <div class="path">1. mooncake/conn.py:2219  transfer_worker       <span class="c">ret != 0 → 拉黑 session</span>
+2. common/conn.py:556    conclude_failure      <span class="c">记原因、推 Failed 给 D</span>
+3. mooncake/conn.py:2383  bootstrap_thread      <span class="c">P 侧处理 ABORT</span>
+4. decode.py:2523         pop_transferred       <span class="c">D 侧 Failed 收尾、释放</span>
+5. prefill.py:1063        handle_inflight_transfer_failure</div>`;
+    ov.classList.remove('hide');
+  } else ov.classList.add('hide');
+}
+
+/* ---------------- playback ---------------- */
+let cur=0, playing=false, started=false, timer=null, voice=false;
+const bar=$('bar');
+steps.forEach((s,k)=>{ const d=document.createElement('div'); d.title=s.title||(k?'总结':'概览'); d.onclick=()=>{goto(k); if(playing) schedule();}; bar.appendChild(d); });
+const total = steps.reduce((a,s)=>a+s.dur,0);
+
+function goto(i){
+  cur=Math.max(0,Math.min(steps.length-1,i));
+  init();
+  for(let k=0;k<=cur;k++){ clearTransient(); S.overlay=null; steps[k].act(); }
+  render(cur); updateBar(); speak();
+}
+function updateBar(){
+  [...bar.children].forEach((d,k)=>{
+    d.className = k<cur?'done':(k===cur?'cur':''); d.style.setProperty('--d', steps[k].dur+'ms');
+    if(k===cur && !playing) d.classList.add('paused');
+  });
+  const el = steps.slice(0,cur).reduce((a,s)=>a+s.dur,0)/1000;
+  $('time').textContent = `${fmt(el)} / ${fmt(total/1000)}`;
+  $('bplay').textContent = playing ? '⏸' : '▶';
+}
+function fmt(s){ s=Math.round(s); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+function schedule(){ clearTimeout(timer); timer=setTimeout(advance, steps[cur].dur); }
+function advance(){
+  if(voice && speechSynthesis.speaking){ timer=setTimeout(advance, 300); return; }
+  if(cur>=steps.length-1){ playing=false; updateBar(); return; }
+  goto(cur+1); schedule();
+}
+function play(){ started=true; if(cur===steps.length-1) goto(0);
+  if(cur===0) goto(1); playing=true; updateBar(); schedule(); }
+function pause(){ playing=false; clearTimeout(timer); speechSynthesis.cancel(); updateBar(); }
+function toggle(){ playing?pause():play(); }
+
+function speak(){
+  if(!voice || !('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const txt = steps[cur].cap.replace(/<[^>]+>/g,'').replace(/&[a-z]+;/g,'').replace(/_/g,' ');
+  const u = new SpeechSynthesisUtterance(txt); u.lang='zh-CN'; u.rate=1.08;
+  const zh = speechSynthesis.getVoices().find(v=>/zh[-_]CN/i.test(v.lang)); if(zh) u.voice=zh;
+  speechSynthesis.speak(u);
+}
+
+$('bplay').onclick=toggle;
+$('bprev').onclick=()=>{ goto(cur-1); if(playing) schedule(); };
+$('bnext').onclick=()=>{ started=true; goto(cur+1); if(playing) schedule(); };
+$('bvoice').onclick=()=>{ voice=!voice; $('bvoice').textContent = voice?'🔊 朗读':'🔇 朗读'; if(voice) speak(); else speechSynthesis.cancel(); };
+document.addEventListener('keydown',e=>{
+  if(e.code==='Space'){ e.preventDefault(); toggle(); }
+  else if(e.code==='ArrowRight') $('bnext').onclick();
+  else if(e.code==='ArrowLeft') $('bprev').onclick();
+});
+
+function fit(){ const s=Math.min(innerWidth/1300, innerHeight/800); $('wrap').style.transform=`translate(-50%,-50%) scale(${s})`; drawArrows(); }
+addEventListener('resize', fit);
+goto(0); fit();
+</script>
+</body>
+</html>

@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>分块 prefill · SGLang KV Cache 系列 03</title>
+<style>
+  :root{--bg:#0b1020;--panel:#121a2e;--line:#26314d;--text:#e6ebf5;--dim:#8a96b3;
+        --A:#4f8cff;--B:#22c55e;--gold:#facc15;--red:#ef4444;--chunk1:#4f8cff;--chunk2:#06b6d4;--chunk3:#a78bfa}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#05070f;color:var(--text);
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;overflow:hidden}
+  code,.mono{font-family:Menlo,Consolas,monospace}
+  #wrap{position:absolute;left:50%;top:50%;width:1280px;height:780px;transform-origin:center center}
+  #stage{position:relative;width:1280px;height:720px;background:var(--bg);border-radius:14px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+  #top{position:absolute;left:24px;right:24px;top:16px;height:44px;display:flex;align-items:center;justify-content:space-between}
+  #stitle{font-size:24px;font-weight:700;letter-spacing:.5px}
+  #stitle .no{color:var(--dim);font-weight:500;margin-right:10px;font-size:18px}
+  #code{font-family:Menlo,Consolas,monospace;font-size:14px;color:#c7d2fe;background:#1e2a4a;border:1px solid #334373;padding:6px 12px;border-radius:8px}
+  #code:empty{opacity:0}
+  /* request strip */
+  #req{position:absolute;left:24px;right:24px;top:70px;height:96px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 16px;transition:box-shadow .3s,border-color .3s}
+  .rline{display:flex;align-items:center;gap:10px;height:38px}
+  .rname{width:62px;font-size:13px;font-weight:600;flex:none}
+  .rname small{display:block;font-size:10.5px;color:var(--dim);font-weight:400}
+  .chunks{display:flex;gap:0;align-items:center}
+  .ck{display:flex;gap:4px;padding:3px 6px;border-radius:8px;border:1.5px solid transparent;margin-right:6px;position:relative;transition:all .4s}
+  .ck.cur{border-color:var(--gold);background:rgba(250,204,21,.07)}
+  .ck .lab{position:absolute;top:-9px;left:6px;font-size:9.5px;color:var(--dim);background:var(--panel);padding:0 3px}
+  .chip{font-family:Menlo,monospace;font-size:12px;padding:4px 7px;border-radius:7px;border:1.5px solid var(--line);background:#0f1628;transition:all .4s;animation:pop .35s ease-out}
+  .chip.pending{color:#64748b;border-style:dashed}
+  .chip.run{border-color:var(--c);color:var(--c)}
+  .chip.done{border-color:var(--c);background:color-mix(in srgb,var(--c) 22%,transparent);color:#fff}
+  .chip.hit{border-color:var(--gold);color:var(--gold);background:rgba(250,204,21,.12)}
+  .chip.out{border-style:dashed;border-color:var(--c);color:var(--c)}
+  .rmeta{margin-left:auto;font-family:Menlo,monospace;font-size:11.5px;color:#c7d2fe;white-space:nowrap}
+  .rmeta b{color:var(--gold)}
+  @keyframes pop{from{transform:scale(.6);opacity:0}to{transform:scale(1);opacity:1}}
+  /* panels */
+  .panel{position:absolute;top:176px;height:418px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;transition:box-shadow .3s,border-color .3s}
+  .panel h3{margin:0 0 2px;font-size:16px}
+  .panel .sub{font-size:12px;color:var(--dim);margin-bottom:8px}
+  .focus{border-color:#7aa2ff!important;box-shadow:0 0 0 2px rgba(122,162,255,.35),0 0 28px rgba(122,162,255,.25)}
+  #ptree{left:24px;width:370px}
+  #psch{left:406px;width:470px}
+  #pkv{left:888px;width:368px}
+  /* tree */
+  #tree{display:flex;justify-content:center;padding-top:4px}
+  .tnode{display:flex;flex-direction:column;align-items:center}
+  .node{background:#0f1628;border:1.5px solid #3b4a6e;border-radius:9px;padding:5px 7px;transition:all .4s;text-align:center;max-width:300px}
+  .node.fresh{animation:pop .5s ease-out}
+  .node.hit{border-color:var(--gold);box-shadow:0 0 16px rgba(250,204,21,.35)}
+  .ntitle{font-size:13px;color:var(--dim);padding:2px 10px}
+  .ntoks{display:flex;flex-wrap:wrap;gap:2px;justify-content:center}
+  .tk{font-family:Menlo,monospace;font-size:10.5px;padding:1px 4px;border-radius:3px;background:color-mix(in srgb,var(--c) 30%,transparent);border:1px solid var(--c)}
+  .nmeta{font-family:Menlo,monospace;font-size:10px;color:var(--dim);margin-top:3px}
+  .nmeta .lock{color:var(--gold)}
+  .kids{display:flex;justify-content:center;position:relative;padding-top:12px}
+  .kids::before{content:'';position:absolute;top:0;left:50%;height:12px;border-left:2px solid #475569}
+  .kid{position:relative;padding:12px 4px 0}
+  .kid::before,.kid::after{content:'';position:absolute;top:0;width:50%;height:12px;border-top:2px solid #475569}
+  .kid::before{right:50%}
+  .kid::after{left:50%;border-left:2px solid #475569}
+  .kid:only-child::before{display:none}
+  .kid:only-child::after{border-top:none}
+  .kid:first-child::before{border-top:none}
+  .kid:last-child::after{border-top:none;border-left:none}
+  .kid:last-child::before{border-right:2px solid #475569}
+  .kid:only-child::after{border-left:2px solid #475569}
+  /* scheduler state */
+  .vars{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;font-family:Menlo,monospace;font-size:12px;margin-bottom:8px}
+  .vars .k{color:var(--dim)}
+  .vars .v{color:#e6ebf5}
+  .vars .v.chg{color:var(--gold);animation:flash .9s ease-out}
+  @keyframes flash{0%{background:rgba(250,204,21,.25)}100%{background:transparent}}
+  .row{display:flex;align-items:center;gap:8px;margin-bottom:6px;animation:pop .4s ease-out}
+  .rlab{width:60px;flex:none;font-size:12px;line-height:1.3}
+  .rlab .idx{font-family:Menlo,monospace;color:var(--dim)}
+  .cells{display:flex;flex-wrap:wrap;gap:2px}
+  .cell{width:20px;height:21px;border-radius:4px;font-family:Menlo,monospace;font-size:10px;display:flex;align-items:center;justify-content:center;
+    background:color-mix(in srgb,var(--c) 35%,transparent);border:1px solid var(--c);animation:pop .35s ease-out}
+  .cell.prot{box-shadow:inset 0 -3px 0 var(--gold)}
+  .rowempty{font-size:12px;color:var(--dim);font-style:italic}
+  #calc{margin-top:6px;border-top:1px dashed #2a3656;padding-top:6px;font-family:Menlo,Consolas,monospace;font-size:12px;line-height:1.55;white-space:pre;color:#dbe4ff;animation:fadein .45s ease-out}
+  #calc .c{color:var(--dim)}
+  #calc .y{color:var(--gold)}
+  #calc .g{color:#86efac}
+  #calc .r{color:#fca5a5}
+  /* kv grid */
+  #grid{display:grid;grid-template-columns:repeat(6,1fr);gap:5px}
+  .slot{height:46px;border-radius:7px;border:1.5px solid #2c3858;background:#0c1222;position:relative;transition:all .45s}
+  .slot .i{position:absolute;left:4px;top:2px;font-family:Menlo,monospace;font-size:9.5px;color:var(--dim)}
+  .slot .t{position:absolute;left:0;right:0;bottom:5px;text-align:center;font-family:Menlo,monospace;font-size:10px}
+  .slot.reserved{opacity:.35;border-style:dashed}
+  .slot.kv{border:2px solid var(--c);background:color-mix(in srgb,var(--c) 45%,transparent)}
+  .slot.tree{border:2px solid var(--gold);background:color-mix(in srgb,var(--c) 45%,transparent)}
+  .slot.tree::after{content:'🌲';position:absolute;right:3px;top:1px;font-size:9px}
+  .slot.freeing{border:2px solid var(--red);background:rgba(239,68,68,.3);animation:blink .6s ease-in-out infinite alternate}
+  @keyframes blink{from{box-shadow:0 0 0 rgba(239,68,68,0)}to{box-shadow:0 0 18px rgba(239,68,68,.7)}}
+  #outloc{margin-top:8px;font-family:Menlo,monospace;font-size:12px;color:#c7d2fe;min-height:16px}
+  #legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;font-size:11px;color:var(--dim)}
+  #legend span{display:flex;align-items:center;gap:4px}
+  #legend i{width:12px;height:12px;border-radius:3px;display:inline-block}
+  /* caption */
+  #cap{position:absolute;left:24px;right:24px;top:604px;height:102px;display:flex;align-items:center;justify-content:center;text-align:center;font-size:20px;line-height:1.55;padding:0 30px;
+    background:linear-gradient(180deg,rgba(18,26,46,.9),rgba(18,26,46,.6));border:1px solid var(--line);border-radius:12px}
+  #cap span{animation:fadein .5s ease-out}
+  #cap em{font-style:normal;color:var(--gold)}
+  #cap code{font-size:17px;color:#c7d2fe}
+  @keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  /* overlay */
+  #ov{position:absolute;inset:0;background:radial-gradient(ellipse at center,#16224a 0%,#0b1020 70%);display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .6s;z-index:10}
+  #ov.hide{opacity:0;pointer-events:none}
+  #ov h1{font-size:50px;margin:0 0 14px;letter-spacing:2px}
+  #ov h2{font-size:22px;font-weight:400;color:var(--dim);margin:0 0 34px}
+  #ov .big{font-size:18px;padding:12px 30px;border-radius:30px;background:#4f8cff;color:#fff;border:none;cursor:pointer}
+  #ov .sum{font-size:20px;line-height:1.9;text-align:left}
+  #ov .sum b{color:var(--gold)}
+  #ov .path{margin-top:22px;font-family:Menlo,monospace;font-size:15px;color:#c7d2fe;background:#121a2e;border:1px solid var(--line);padding:14px 22px;border-radius:10px;line-height:1.9;white-space:pre}
+  /* controls */
+  #ctrl{position:absolute;left:0;right:0;top:732px;height:44px;display:flex;align-items:center;gap:12px;padding:0 6px}
+  #ctrl button{background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;min-width:40px;font-size:15px;cursor:pointer;padding:0 10px}
+  #ctrl button:hover{background:#26325a}
+  #ctrl a.home{display:flex;align-items:center;background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;padding:0 10px;font-size:13px;text-decoration:none;white-space:nowrap}
+  #ctrl a.home:hover{background:#26325a}
+  #bar{flex:1;display:flex;gap:3px;height:10px;cursor:pointer}
+  #bar div{flex:1;background:#232d4b;border-radius:3px;position:relative;overflow:hidden}
+  #bar div.done{background:#4f8cff}
+  #bar div.cur::after{content:'';position:absolute;left:0;top:0;bottom:0;background:#4f8cff;animation:fill var(--d) linear forwards}
+  #bar div.cur.paused::after{animation-play-state:paused}
+  @keyframes fill{from{width:0}to{width:100%}}
+  #time{font-size:13px;color:var(--dim);width:64px;text-align:right}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <div id="top"><div id="stitle"></div><div id="code"></div></div>
+
+    <div id="req"><div id="reqs"></div></div>
+
+    <div class="panel" id="ptree">
+      <h3>① RadixCache</h3><div class="sub">每块算完先暂存进树；🔒 = lock_ref（沿路径到根都加）</div>
+      <div id="tree"></div>
+    </div>
+
+    <div class="panel" id="psch">
+      <h3>② 调度器状态 + ReqToTokenPool</h3><div class="sub">金色下划线 = cache_protected_len 以内（已归树所有）</div>
+      <div id="vars" class="vars"></div>
+      <div id="rows"></div>
+      <div id="calc"></div>
+    </div>
+
+    <div class="panel" id="pkv">
+      <h3>③ Allocator + ④ KV Pool</h3><div class="sub">page_size = 1，24 个 slot；slot 0 保留</div>
+      <div id="grid"></div>
+      <div id="outloc"></div>
+      <div id="legend">
+        <span><i style="background:#4f8cff"></i>第 1 块</span>
+        <span><i style="background:#06b6d4"></i>第 2 块</span>
+        <span><i style="background:#a78bfa"></i>第 3 块</span>
+        <span><i style="background:#22c55e"></i>请求 B</span>
+        <span><i style="border:2px solid #facc15"></i>归树所有 🌲</span>
+      </div>
+    </div>
+
+    <div id="cap"></div>
+    <div id="ov"></div>
+  </div>
+
+  <div id="ctrl">
+    <a class="home" href="../index.html" title="返回目录">☰ 目录</a>
+    <button id="bprev" title="上一步 (←)">⏮</button>
+    <button id="bplay" title="自动演示/暂停 (空格)">▶</button>
+    <button id="bnext" title="下一步 (→)">⏭</button>
+    <div id="bar"></div>
+    <div id="time"></div>
+    <button id="bvoice" title="中文语音朗读">🔇 朗读</button>
+  </div>
+</div>
+
+<script>
+const CK = ['#4f8cff','#06b6d4','#a78bfa'];       // A 的第 1/2/3 块
+const BCOL = '#22c55e';
+const A_TOK = ['<s>','Read','the','long','doc','and','sum','it','up','.'];
+const B_TOK = ['<s>','Read','the','long','doc','and','sum','it','now','!'];
+const CHUNK = 4;
+
+let S;
+function init(){
+  S = {
+    slots: Array.from({length:24}, (_,i)=>({c:null, st: i===0?'reserved':'free', tok:''})),
+    next: 1,                                  // TokenToKVPoolAllocator.clear()：从 slot 1 开始
+    tree:{id:'root', toks:[], lock:0, children:[]},
+    A:{chunks:[[],[],[]], state:'pending', cur:-1, outs:[]}, B:null,
+    vars:{}, rows:[], overlay:null,
+  };
+  clearTransient();
+}
+function clearTransient(){ S.focus=[]; S.outLoc=null; S.calc=''; S.chg=[]; walk(S.tree,n=>{n.fresh=false;n.hit=false;}); }
+function walk(n,f){ f(n); n.children.forEach(c=>walk(c,f)); }
+function alloc(n){ const out=[]; for(let i=0;i<n;i++) out.push(S.next++); return out; }
+function write(slots, toks, c, st='kv'){ slots.forEach((s,i)=>S.slots[s]={c, st, tok:toks[i]}); }
+function setVars(o){ Object.keys(o).forEach(k=>{ if(S.vars[k]!==o[k]) S.chg.push(k); }); Object.assign(S.vars,o); }
+function find(id){ let r=null; walk(S.tree,n=>{ if(n.id===id) r=n; }); return r; }
+function lockPath(ids, d){ ids.forEach(id=>{ find(id).lock += d; }); }
+
+const steps = [
+ { title:'', code:'', dur:5000,
+   cap:'一个 prompt 太长、一次 prefill 放不下时，调度器把它<em>切成几块分批算</em>。每块算完，KV 先去哪里？',
+   act(){ S.overlay='title'; } },
+
+ { title:'设定', code:'managers/scheduler.py:3873  chunked_prefill_size', dur:8500,
+   cap:'<code>chunked_prefill_size = 4</code>：一次 prefill 最多算 4 个 token。请求 A 有 <em>10 个 token</em>，要分 4 + 4 + 2 三块。',
+   act(){ S.A.state='pending'; setVars({chunked_req:'None', extend_range:'—', cache_protected_len:'—', inflight_middle_chunks:'—'});
+     S.calc=`<span class="c"># get_new_batch_prefill</span>
+chunked_prefill_size = self.chunked_prefill_size = <span class="y">4</span>
+adder = PrefillAdder(..., rem_chunk_tokens = 4)`;
+     S.focus=['req','psch']; } },
+
+ { title:'第一次进场：要不要切', code:'managers/schedule_policy.py:1510  _select_prefill_admission', dur:10000,
+   cap:'A 要算 10 个，超过上限 4，于是<em>标记为分块</em>：这一轮只算 [0, 4)，并且 <code>max_new_tokens = 0</code>，<em>不生成 token</em>。',
+   act(){ S.A.cur=0;
+     S.calc=`<span class="c"># _select_prefill_admission</span>
+chunk_fit_tokens 10 > chunk_tokens_limit 4
+extend_len = 4 // page_size × page_size = <span class="y">4</span>
+is_chunked = <span class="y">True</span>
+max_new_tokens = <span class="y">0</span>   <span class="c"># 中间块不采样</span>`;
+     S.focus=['req','psch']; } },
+
+ { title:'记为当前分块请求', code:'managers/scheduler.py:4044  self.chunked_req', dur:9000,
+   cap:'调度器把 A 记为 <code>chunked_req</code>，<em>同一时刻只有一个</em>。<code>inflight_middle_chunks</code> 记下还有一个中间块没出结果。',
+   act(){ S.A.cur=0; setVars({chunked_req:'A', extend_range:'[0, 4)', inflight_middle_chunks:'1'});
+     S.calc=`<span class="c"># _commit_prefill_admission (policy:1541)</span>
+req.set_extend_range(0, 0 + 4)
+self.new_chunked_req = req
+<span class="c"># scheduler.py</span>
+self.chunked_req = adder.new_chunked_req
+self.chunked_req.inflight_middle_chunks += 1`;
+     S.focus=['psch']; } },
+
+ { title:'第 1 块：分配并写入', code:'managers/schedule_batch.py:2633  prepare_for_extend', dur:9000,
+   cap:'只为这 4 个 token 分配 slot <em>1–4</em>，前向时写入 KV。请求行里只填了前 4 格，后面的还没分配。',
+   act(){ const s=alloc(4); S.A.chunks[0]=s; write(s, A_TOK.slice(0,4), CK[0]); S.A.cur=0;
+     S.rows=[{req:'A', cells:s.map(x=>({slot:x}))}]; S.outLoc=s;
+     S.calc=`<span class="c"># prepare_for_extend</span>
+input_ids  = get_fill_ids()[len(prefix_indices):] = t0..t3
+prefix_len = 0，seq_len = extend_range.end = <span class="y">4</span>
+out_cache_loc = [${s}]`;
+     S.focus=['pkv','psch']; } },
+
+ { title:'中间块：不出 token', code:'scheduler_components/batch_result_processor.py:417', dur:9000,
+   cap:'前向结束，但这是中间块：结果处理<em>不提交输出、不推流</em>，只把 <code>inflight_middle_chunks</code> 减回 0。',
+   act(){ S.A.cur=0; S.A.done0=true; setVars({inflight_middle_chunks:'0'});
+     S.calc=`<span class="c"># process_batch_result_prefill</span>
+should_commit_output 要求
+    inflight_middle_chunks <= 0      <span class="r">✗ 此时是 1</span>
+→ 跳过采样结果
+req.inflight_middle_chunks -= 1   → <span class="y">0</span>`;
+     S.focus=['psch','req']; } },
+
+ { title:'暂存进树', code:'mem_cache/radix_cache.py:561  cache_unfinished_req', dur:11000,
+   cap:'下一轮调度开头，先把已算好的 4 个 token <em>插进 radix tree</em> 并加锁。这 4 个 slot 从此<em>归树所有</em>，A 只是借用。',
+   act(){ S.tree.children.push({id:'n1', toks:A_TOK.slice(0,4), c:CK[0], lock:1, hit:0, fresh:true, children:[]});
+     S.A.chunks[0].forEach(s=>S.slots[s].st='tree'); setVars({cache_protected_len:'4'});
+     S.calc=`<span class="c"># scheduler.py:3653 stash_chunked_request</span>
+<span class="c">#   → maybe_cache_unfinished_req(req, chunked=True)</span>
+insert(key = t0..t3)        → 新节点 n1
+cache_protected_len = <span class="y">4</span>
+dec_lock_ref(root)；inc_lock_ref(n1)`;
+     S.focus=['ptree','pkv']; } },
+
+ { title:'暂存不算命中', code:'mem_cache/radix_cache.py:775  _inc_hit_count', dur:8500,
+   cap:'插入时传了 <code>chunked=True</code>：自己刚建的节点<em>不增加 hit_count</em>，否则淘汰顺序会被分块请求自己抬高。',
+   act(){ S.calc=`def _inc_hit_count(node, chunked=False):
+    if chunked:
+        return            <span class="c"># 不自我抬高</span>
+    node.hit_count += 1
+
+n1.hit_count = <span class="y">0</span>`;
+     S.focus=['ptree']; } },
+
+ { title:'续块：算下一段范围', code:'managers/schedule_policy.py:1135  add_chunked_req', dur:10500,
+   cap:'续块直接走 <code>add_chunked_req</code>，<em>不重新匹配前缀</em>。还剩 6 个，超过 4，这次算 [4, 8)，仍是中间块。',
+   act(){ S.A.cur=1; setVars({extend_range:'[4, 8)', inflight_middle_chunks:'1'});
+     S.calc=`<span class="c"># scheduler.py:3908 init_next_round_input()：不传 tree_cache</span>
+cand = len(fill_ids) − len(prefix_indices) = 10 − 4 = 6
+truncated = 6 > 4 = <span class="y">True</span>
+set_extend_range(4, 4 + 4)
+return req        <span class="c"># 还没完，继续当 chunked_req</span>`;
+     S.focus=['req','psch']; } },
+
+ { title:'第 2 块：读前缀，写新块', code:'managers/schedule_batch.py:2633  prepare_for_extend', dur:9500,
+   cap:'第 2 块分配 slot <em>5–8</em>。attention 读的是 [0, 8) 全部 KV：前 4 个来自树里锁住的 slot 1–4，后 4 个刚写入。',
+   act(){ const s=alloc(4); S.A.chunks[1]=s; write(s, A_TOK.slice(4,8), CK[1]); S.A.cur=1;
+     S.rows[0].cells.push(...s.map(x=>({slot:x}))); S.outLoc=s;
+     S.calc=`prefix_indices = [1, 2, 3, 4]   <span class="c"># 树里的</span>
+input_ids = t4..t7，prefix_len 4，seq_len 8
+out_cache_loc = [${s}]
+<span class="c"># 结果同样不提交，inflight 回到 0</span>`;
+     S.focus=['pkv','psch']; } },
+
+ { title:'再次暂存：锁往下移', code:'mem_cache/radix_cache.py:614  cache_protected_len', dur:11000,
+   cap:'再插一次，树里多了子节点 [4, 8)。<code>cache_protected_len</code> 变成 8，锁从 n1 <em>移到更深的 n2</em>（路径上都加）。',
+   act(){ const n1=find('n1'); lockPath(['n1'],-1);
+     n1.children.push({id:'n2', toks:A_TOK.slice(4,8), c:CK[1], lock:0, fresh:true, children:[]}); lockPath(['n1','n2'],1);
+     S.A.chunks[1].forEach(s=>S.slots[s].st='tree'); S.A.done1=true;
+     setVars({cache_protected_len:'8', inflight_middle_chunks:'0'});
+     S.calc=`insert(t0..t7)：n1 已在树中，新增 n2
+prefix_len = 4 → free_segment([4:4]) 无重复可释放
+re-match → new_indices 长度 8
+cache_protected_len = <span class="y">8</span>
+dec_lock_ref(n1)；inc_lock_ref(n2)  <span class="c"># 路径 n1→n2</span>`;
+     S.focus=['ptree','psch']; } },
+
+ { title:'请求 B：命中 A 的半成品', code:'managers/schedule_policy.py:157  match_prefix_for_req', dur:11500,
+   cap:'这时 B 到达，前 8 个 token 和 A 一样。A 还没算完，但<em>已暂存的 8 个 token 能直接命中</em>。这正是暂存的意义。',
+   act(){ S.B={state:'hit'}; find('n1').hit=true; find('n2').hit=true; lockPath(['n1','n2'],1);
+     S.calc=`match_prefix(B)：沿 n1 → n2 命中 <span class="y">8</span> 个
+<span class="c"># 锁住的节点照样能匹配，只是不能被淘汰</span>
+inc_lock_ref(n2)   n1、n2 的 lock_ref = <span class="y">2</span>
+B 只需要算 now、! 两个 token`;
+     S.focus=['req','ptree']; } },
+
+ { title:'最后一块：和 B 一起算', code:'managers/schedule_policy.py:1187  return None', dur:11000,
+   cap:'A 只剩 2 个，<em>不再截断</em>，<code>add_chunked_req</code> 返回 None：A 不再是分块请求。A 的最后一块和 B 在同一批里算。',
+   act(){ const a=alloc(2); S.A.chunks[2]=a; write(a, A_TOK.slice(8,10), CK[2]); S.A.cur=2;
+     const b=alloc(2); write(b, B_TOK.slice(8,10), BCOL); S.B={state:'run', slots:b};
+     S.rows[0].cells.push(...a.map(x=>({slot:x})));
+     S.rows.push({req:'B', cells:[1,2,3,4,5,6,7,8].map(x=>({slot:x, shared:true})).concat(b.map(x=>({slot:x})))});
+     setVars({chunked_req:'None', extend_range:'[8, 10)'}); S.outLoc=[...a,...b];
+     S.calc=`cand = 10 − 8 = 2，truncated = 2 > 4 = <span class="y">False</span>
+return None  → self.chunked_req = <span class="y">None</span>
+max_new_tokens 恢复为请求设定值
+本批：A [8,10) → [${a}]   B [8,10) → [${b}]`;
+     S.focus=['pkv','psch','req']; } },
+
+ { title:'出 token，进入 decode', code:'scheduler_components/batch_result_processor.py:310', dur:9000,
+   cap:'最后一块的结果<em>正常提交</em>：A 采样出 A1，B 采样出 B1，开始推流。两个请求都并入 running batch 进入 decode。',
+   act(){ S.A.cur=-1; S.A.state='decode'; S.A.outs=['A1']; S.B.state='decode'; S.B.outs=['B1'];
+     S.calc=`should_commit_output：
+    inflight_middle_chunks <= 0   <span class="g">✓</span>
+A → A1，B → B1
+<span class="c"># chunked_req 已是 None，不再被排除出 running batch</span>`;
+     S.focus=['req']; } },
+
+ { title:'A 结束：整条进树', code:'mem_cache/radix_cache.py:479  cache_finished_req', dur:11500,
+   cap:'A 写完 A1 的 KV 后结束。[8, 11) 作为 n2 的子节点进树，并在 prompt 边界 10 处<em>拆成两个节点</em>。A 释放锁，B 仍锁着前缀。',
+   act(){ const s=alloc(1); write(s,['A1'],CK[2]); S.rows[0].cells.push({slot:s[0]}); S.A.state='done';
+     const n2=find('n2'); lockPath(['n1','n2'],-1);
+     n2.children.push({id:'n3', toks:A_TOK.slice(8,10), c:CK[2], lock:0, fresh:true,
+       children:[{id:'n4', toks:['A1'], c:CK[2], lock:0, fresh:true, children:[]}]});
+     [...S.A.chunks[2], s[0]].forEach(x=>S.slots[x].st='tree'); S.rows=S.rows.filter(r=>r.req!=='A');
+     S.calc=`key = A 的 11 个 token，insert → 新增 [8, 11)
+prompt_key 10，0 < 10 < 11 → <span class="y">在 10 处拆开</span>
+free [cache_protected_len 8 : prefix_len 8] → 无
+dec_lock_ref(A.last_node)  n1、n2 的 lock_ref = <span class="y">1</span>（B）`;
+     S.focus=['ptree','pkv']; } },
+
+ { title:'边界：分块途中被取消', code:'managers/scheduler.py:3498  process_pending_chunked_abort', dur:12000,
+   cap:'若 A 在第 2 块之后被取消：<em>已暂存的 8 个 token 留在树里</em>（解锁，可被淘汰），只有还没进树的 slot 被释放。',
+   act(){ S.calc=`<span class="c"># abort_request 只记下 _pending_chunked_abort_req</span>
+<span class="c"># 下一轮调度开头才真正处理（中途拆不安全）</span>
+release_kv_cache(req, tree_cache, is_insert=<span class="y">False</span>)
+  → 释放 kv_indices[cache_protected_len:] 及尾部
+  → dec_lock_ref(last_node)
+self.chunked_req = None
+<span class="g">已暂存的前缀仍可被别的请求复用</span>`;
+     S.focus=['psch','ptree']; } },
+
+ { title:'边界：page_size > 1', code:'managers/schedule_policy.py:1523  extend_len 页对齐', dur:11000,
+   cap:'page_size > 1 时，<em>首块的终点对齐到页</em>，但续块不对齐，可能停在页中间。暂存只放整页，<em>半页留在 prefix_indices</em>（见系列 02）。',
+   act(){ S.calc=`<span class="c"># 首块（_select_prefill_admission）</span>
+extend_len = chunk_tokens_limit // page_size × page_size
+end = (prefix_len + extend_len) // page_size × page_size
+<span class="c"># 续块（add_chunked_req）：new_len = min(cand, rem)</span>
+<span class="c"># cache_unfinished_req：key.page_aligned → 只插整页</span>
+prefix_indices = 树里的整页 + <span class="y">kv_indices[整页:]</span>
+<span class="c"># 半页 slot 由下一块或 cache_finished_req 释放</span>`;
+     S.focus=['psch']; } },
+
+ { title:'', code:'', dur:13000,
+   cap:'把 chunked_prefill_size 调小（如 64），在这 5 个位置打断点，观察 cache_protected_len 和 lock_ref 的变化。',
+   act(){ S.overlay='summary'; } },
+];
+
+/* ---------------- render ---------------- */
+const $ = id => document.getElementById(id);
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function reqHTML(){
+  const A=S.A;
+  const ck = [[0,4],[4,8],[8,10]].map(([a,b],k)=>{
+    const done = (k===0&&A.done0)||(k===1&&A.done1)||(k===2&&(A.state==='decode'||A.state==='done'))||A.chunks[k].length>0&&k<A.cur;
+    const cls = A.cur===k ? 'run' : (A.chunks[k].length ? 'done' : 'pending');
+    return `<div class="ck${A.cur===k?' cur':''}"><span class="lab">块 ${k+1}</span>${A_TOK.slice(a,b).map(t=>`<span class="chip ${cls}" style="--c:${CK[k]}">${esc(t)}</span>`).join('')}</div>`;
+  }).join('');
+  const outs = A.outs.map(o=>`<span class="chip out" style="--c:${CK[2]}">${o}</span>`).join('');
+  const am = A.state==='done' ? '已结束' : A.cur>=0 ? `extend_range [${[0,4,8][A.cur]}, ${[4,8,10][A.cur]})` : '';
+  let h = `<div class="rline"><div class="rname">请求 A<small>10 token</small></div><div class="chunks">${ck}${outs}</div><div class="rmeta">${am}</div></div>`;
+  if(S.B){
+    const hit = B_TOK.slice(0,8).map(t=>`<span class="chip hit">${esc(t)}</span>`).join('');
+    const rest = B_TOK.slice(8).map(t=>`<span class="chip ${S.B.state==='hit'?'pending':'done'}" style="--c:${BCOL}">${esc(t)}</span>`).join('');
+    const outs = (S.B.outs||[]).map(o=>`<span class="chip out" style="--c:${BCOL}">${o}</span>`).join('');
+    h += `<div class="rline"><div class="rname">请求 B<small>10 token</small></div><div class="chunks"><div class="ck">${hit}</div><div class="ck">${rest}${outs}</div></div><div class="rmeta">命中 <b>8</b> / 10</div></div>`;
+  }
+  return h;
+}
+function nodeHTML(n){
+  if(n.id==='root') return `<div class="tnode"><div class="node"><div class="ntitle">root</div></div>${n.children.length?kidsHTML(n.children):''}</div>`;
+  const cls='node'+(n.fresh?' fresh':'')+(n.hit?' hit':'');
+  const toks=n.toks.map(t=>`<span class="tk" style="--c:${n.c}">${esc(t)}</span>`).join('');
+  const lock = n.lock ? `<span class="lock">🔒 ${n.lock}</span>` : 'lock 0';
+  return `<div class="tnode"><div class="${cls}"><div class="ntoks">${toks}</div><div class="nmeta">${n.id} · ${lock}</div></div>${n.children.length?kidsHTML(n.children):''}</div>`;
+}
+function kidsHTML(cs){ return `<div class="kids">${cs.map(c=>`<div class="kid">${nodeHTML(c)}</div>`).join('')}</div>`; }
+function varsHTML(){
+  const keys=['chunked_req','extend_range','cache_protected_len','inflight_middle_chunks'];
+  if(!Object.keys(S.vars).length) return '';
+  return keys.map(k=>`<span class="k">${k}</span><span class="v${S.chg.includes(k)?' chg':''}">${S.vars[k]??'—'}</span>`).join('');
+}
+function rowsHTML(){
+  if(!S.rows.length) return '<span class="rowempty">（请求行还没分配）</span>';
+  const prot = parseInt(S.vars.cache_protected_len)||0;
+  return S.rows.map(r=>`<div class="row"><div class="rlab">请求 ${r.req}<br><span class="idx">行</span></div><div class="cells">${
+    r.cells.map((c,i)=>{ const s=S.slots[c.slot]; const p = r.req==='A' ? i<prot : c.shared;
+      return `<div class="cell${p?' prot':''}" style="--c:${s.c||'#64748b'}">${c.slot}</div>`; }).join('')}</div></div>`).join('');
+}
+function gridHTML(){
+  return S.slots.map((s,i)=>`<div class="slot${s.st!=='free'?' '+s.st:''}" style="--c:${s.c||'#2c3858'}"><span class="i">${i}</span><span class="t">${s.st==='reserved'?'保留':esc(s.tok)}</span></div>`).join('');
+}
+
+function render(i){
+  const st=steps[i];
+  $('stitle').innerHTML = st.title ? `<span class="no">${String(i).padStart(2,'0')}</span>${st.title}` : '';
+  $('code').textContent = st.code;
+  $('cap').innerHTML = `<span>${st.cap}</span>`;
+  $('reqs').innerHTML = reqHTML();
+  $('tree').innerHTML = nodeHTML(S.tree);
+  $('vars').innerHTML = varsHTML();
+  $('rows').innerHTML = rowsHTML();
+  const c=$('calc'); c.innerHTML=S.calc; c.style.animation='none'; void c.offsetWidth; c.style.animation='';
+  $('grid').innerHTML = gridHTML();
+  $('outloc').textContent = S.outLoc ? `out_cache_loc = [${S.outLoc.join(', ')}]` : '';
+  ['req','ptree','psch','pkv'].forEach(id=>$(id).classList.toggle('focus', S.focus.includes(id)));
+
+  const ov=$('ov');
+  if(S.overlay==='title'){
+    ov.innerHTML = `<h1>分块 prefill</h1><h2>SGLang KV Cache 系列 03 · chunked_prefill_size = 4 · 约 3 分钟</h2>`+
+      (started ? '' : `<button class="big" onclick="play()">▶ 开始演示</button>`);
+    ov.classList.remove('hide');
+  } else if(S.overlay==='summary'){
+    ov.innerHTML = `<h1 style="font-size:40px">一句话记住</h1>
+      <div class="sum">同一时刻只有<b>一个 chunked_req</b>；中间块<b>不采样、不推流</b><br>
+      每块算完先<b>暂存进树</b>，锁随 last_node 往下移，<b>cache_protected_len</b> 记录归树的长度<br>
+      别的请求能<b>命中半成品</b>；取消时已暂存的前缀<b>留在树里</b></div>
+      <div class="path">1. schedule_policy.py:1459  _select_prefill_admission  首块怎么切
+2. schedule_policy.py:1135  add_chunked_req            续块范围
+3. scheduler.py:3653        stash_chunked_request      何时暂存
+4. radix_cache.py:561       cache_unfinished_req       暂存做了什么
+5. batch_result_processor.py:417  inflight_middle_chunks  中间块结果</div>`;
+    ov.classList.remove('hide');
+  } else ov.classList.add('hide');
+}
+
+/* ---------------- playback ---------------- */
+let cur=0, playing=false, started=false, timer=null, voice=false;
+const bar=$('bar');
+steps.forEach((s,k)=>{ const d=document.createElement('div'); d.title=s.title||(k?'总结':'概览'); d.onclick=()=>{goto(k); if(playing) schedule();}; bar.appendChild(d); });
+const total = steps.reduce((a,s)=>a+s.dur,0);
+function goto(i){
+  cur=Math.max(0,Math.min(steps.length-1,i));
+  init();
+  for(let k=0;k<=cur;k++){ clearTransient(); S.overlay=null; steps[k].act(); }
+  render(cur); updateBar(); speak();
+}
+function updateBar(){
+  [...bar.children].forEach((d,k)=>{ d.className = k<cur?'done':(k===cur?'cur':''); d.style.setProperty('--d', steps[k].dur+'ms'); if(k===cur && !playing) d.classList.add('paused'); });
+  const el = steps.slice(0,cur).reduce((a,s)=>a+s.dur,0)/1000;
+  $('time').textContent = `${fmt(el)} / ${fmt(total/1000)}`;
+  $('bplay').textContent = playing ? '⏸' : '▶';
+}
+function fmt(s){ s=Math.round(s); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+function schedule(){ clearTimeout(timer); timer=setTimeout(advance, steps[cur].dur); }
+function advance(){
+  // 开着朗读时，等这句读完再进入下一步
+  if(voice && speechSynthesis.speaking){ timer=setTimeout(advance, 300); return; }
+  if(cur>=steps.length-1){ playing=false; updateBar(); return; }
+  goto(cur+1); schedule();
+}
+function play(){ started=true; if(cur===steps.length-1) goto(0); if(cur===0) goto(1); playing=true; updateBar(); schedule(); }
+function pause(){ playing=false; clearTimeout(timer); speechSynthesis.cancel(); updateBar(); }
+function toggle(){ playing?pause():play(); }
+function speak(){
+  if(!voice || !('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const txt = steps[cur].cap.replace(/<[^>]+>/g,'').replace(/&[a-z]+;/g,'').replace(/_/g,' ');
+  const u = new SpeechSynthesisUtterance(txt); u.lang='zh-CN'; u.rate=1.08;
+  const zh = speechSynthesis.getVoices().find(v=>/zh[-_]CN/i.test(v.lang)); if(zh) u.voice=zh;
+  speechSynthesis.speak(u);
+}
+$('bplay').onclick=toggle;
+$('bprev').onclick=()=>{ goto(cur-1); if(playing) schedule(); };
+$('bnext').onclick=()=>{ started=true; goto(cur+1); if(playing) schedule(); };
+$('bvoice').onclick=()=>{ voice=!voice; $('bvoice').textContent = voice?'🔊 朗读':'🔇 朗读'; if(voice) speak(); else speechSynthesis.cancel(); };
+document.addEventListener('keydown',e=>{
+  if(e.code==='Space'){ e.preventDefault(); toggle(); }
+  else if(e.code==='ArrowRight') $('bnext').onclick();
+  else if(e.code==='ArrowLeft') $('bprev').onclick();
+});
+function fit(){ const s=Math.min(innerWidth/1300, innerHeight/800); $('wrap').style.transform=`translate(-50%,-50%) scale(${s})`; }
+addEventListener('resize', fit); fit();
+goto(0);
+</script>
+</body>
+</html>

@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>并行如何切 KV · SGLang KV Cache 系列 05</title>
+<style>
+  :root{--bg:#0b1020;--panel:#121a2e;--line:#26314d;--text:#e6ebf5;--dim:#8a96b3;--gold:#facc15;--red:#ef4444;
+        --A:#4f8cff;--B:#22c55e;--L:#a78bfa}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#05070f;color:var(--text);
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;overflow:hidden}
+  #wrap{position:absolute;left:50%;top:50%;width:1280px;height:780px;transform-origin:center center}
+  #stage{position:relative;width:1280px;height:720px;background:var(--bg);border-radius:14px;overflow:hidden;
+    box-shadow:0 20px 60px rgba(0,0,0,.6)}
+  code,.mono{font-family:Menlo,Consolas,monospace}
+  /* top bar */
+  #top{position:absolute;left:24px;right:24px;top:16px;height:44px;display:flex;align-items:center;justify-content:space-between}
+  #stitle{font-size:24px;font-weight:700;letter-spacing:.5px}
+  #stitle .no{color:var(--dim);font-weight:500;margin-right:10px;font-size:18px}
+  #code{font-family:Menlo,Consolas,monospace;font-size:14px;color:#c7d2fe;background:#1e2a4a;border:1px solid #334373;
+    padding:6px 12px;border-radius:8px;transition:opacity .3s}
+  #code:empty{opacity:0}
+  /* panels */
+  .panel{position:absolute;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;
+    transition:box-shadow .3s,border-color .3s}
+  .panel h3{margin:0 0 6px;font-size:15px;display:flex;justify-content:space-between;align-items:baseline}
+  .panel h3 small{font-size:11.5px;color:var(--dim);font-weight:400}
+  .focus{border-color:#7aa2ff!important;box-shadow:0 0 0 2px rgba(122,162,255,.35),0 0 28px rgba(122,162,255,.25)}
+  #pGPU{left:24px;top:70px;width:600px;height:522px}
+  #pCfg{left:636px;top:70px;width:620px;height:110px}
+  #pLed{left:636px;top:188px;width:620px;height:172px}
+  #pTab{left:636px;top:368px;width:620px;height:224px}
+  /* gpu grid */
+  .rowlab{font-size:12px;color:var(--dim);margin:6px 0 5px;height:16px;display:flex;gap:8px;align-items:center}
+  .rowlab b{color:var(--text);font-weight:600}
+  .rowlab .tagx{font-size:10.5px;padding:0 6px;border-radius:4px;border:1px solid #33416a;background:#18223d;color:#c7d2fe}
+  .grow{display:grid;grid-template-columns:repeat(4,134px);gap:9px}
+  .gpu{height:208px;background:#0e1527;border:1px solid #2a3656;border-radius:9px;padding:6px 8px;display:flex;flex-direction:column;gap:4px;overflow:hidden;
+    transition:all .4s;animation:pop .4s ease-out}
+  .gpu.hl{border-color:var(--gold);box-shadow:0 0 16px rgba(250,204,21,.35)}
+  .gpu.idle{opacity:.5}
+  .ghead{display:flex;align-items:center;gap:6px}
+  .ghead .nm{font-size:15px;font-weight:700}
+  .ghead .bd{margin-left:auto;font-family:Menlo,monospace;font-size:10px;padding:1px 6px;border-radius:5px;background:#1b2440;border:1px solid #33416a;color:#c7d2fe}
+  .lbl{font-size:10px;color:var(--dim);margin-bottom:1px}
+  .chips{display:flex;flex-wrap:wrap;gap:3px;min-height:18px}
+  .hchip{font-family:Menlo,monospace;font-size:10.5px;font-weight:600;padding:1px 6px;border-radius:5px;color:#fff;
+    background:color-mix(in srgb,var(--c) 55%,transparent);border:1px solid var(--c)}
+  .hchip.dup{box-shadow:0 0 0 1.5px var(--gold)}
+  .lbar{position:relative;height:12px;border-radius:4px;background:#1a2340;overflow:hidden}
+  .lbar i{position:absolute;top:0;bottom:0;background:linear-gradient(90deg,#6d7fd8,#8b9cf0);border-radius:4px;transition:all .5s}
+  .ltxt{font-family:Menlo,monospace;font-size:10px;color:#c7d2fe;margin-top:2px}
+  .pages{display:grid;grid-template-columns:repeat(4,1fr);gap:3px}
+  .pg{height:15px;border-radius:4px;font-family:Menlo,monospace;font-size:9.5px;display:flex;align-items:center;justify-content:center;
+    border:1px solid #26314d;color:#4b5875;transition:all .4s}
+  .pg.own{border-color:var(--c);background:color-mix(in srgb,var(--c) 45%,transparent);color:#fff}
+  .pages.hl .pg.own{box-shadow:0 0 0 1.5px var(--gold)}
+  .pg.part{border-color:var(--c);color:#fff;background:repeating-linear-gradient(90deg,color-mix(in srgb,var(--c) 55%,transparent) 0 3px,transparent 3px 7px)}
+  .gfoot{margin-top:auto;font-family:Menlo,monospace;font-size:10.5px;color:var(--dim);line-height:1.35;border-top:1px dashed #26314d;padding-top:4px}
+  .gfoot b{color:var(--text);font-weight:600}
+  .empty{font-size:11px;color:#4b5875;font-style:italic}
+  @keyframes pop{from{transform:scale(.92);opacity:0}to{transform:scale(1);opacity:1}}
+  /* config */
+  #cfg{font-size:13px;line-height:1.7;white-space:nowrap}
+  #cfg .m{color:var(--dim)}
+  #cfg .m b{color:var(--text)}
+  #cfg .knobs{display:flex;gap:8px;margin:2px 0}
+  #cfg .k{font-family:Menlo,monospace;font-size:12px;padding:1px 9px;border-radius:6px;border:1px solid #33416a;background:#18223d;color:#8a96b3}
+  #cfg .k.on{border-color:var(--gold);color:var(--gold);background:rgba(250,204,21,.1)}
+  #cfg .f{font-family:Menlo,monospace;font-size:12px;color:#c7d2fe}
+  #cfg .f b{color:var(--gold)}
+  /* ledger */
+  #led{font-family:Menlo,Consolas,monospace;font-size:12.3px;line-height:1.6;white-space:pre;color:#dbe4ff;animation:fadein .45s ease-out}
+  #led .c{color:var(--dim)}
+  #led .y{color:var(--gold)}
+  #led .g{color:#86efac}
+  #led .r{color:#fca5a5}
+  .ph{font-size:12.5px;color:var(--dim);font-style:italic}
+  /* table */
+  table{width:100%;border-collapse:collapse;font-size:11.5px}
+  #pTab h3{margin-bottom:3px}
+  th{font-weight:500;color:var(--dim);text-align:right;padding:1px 5px 3px;border-bottom:1px solid #2a3656;white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  td{text-align:right;padding:1px 5px;line-height:1.28;font-family:Menlo,monospace;font-size:11px;border-bottom:1px solid #1a2340;white-space:nowrap;animation:fadein .4s ease-out}
+  td:first-child{font-family:inherit;font-size:11.5px}
+  tr.cur td{background:rgba(250,204,21,.1);color:#fff}
+  tr.cur td:first-child{box-shadow:inset 3px 0 0 var(--gold)}
+  .bad{color:#fca5a5}.good{color:#86efac}
+  /* caption */
+  #cap{position:absolute;left:24px;right:24px;top:602px;height:104px;display:flex;align-items:center;justify-content:center;
+    text-align:center;font-size:20px;line-height:1.55;padding:0 30px;background:linear-gradient(180deg,rgba(18,26,46,.9),rgba(18,26,46,.6));
+    border:1px solid var(--line);border-radius:12px}
+  #cap span{animation:fadein .5s ease-out}
+  #cap em{font-style:normal;color:var(--gold)}
+  #cap code{font-size:17px;color:#c7d2fe}
+  @keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  /* overlay */
+  #ov{position:absolute;inset:0;background:radial-gradient(ellipse at center,#16224a 0%,#0b1020 70%);display:flex;flex-direction:column;
+    align-items:center;justify-content:center;transition:opacity .6s;z-index:10}
+  #ov.hide{opacity:0;pointer-events:none}
+  #ov h1{font-size:50px;margin:0 0 14px;letter-spacing:2px}
+  #ov h2{font-size:22px;font-weight:400;color:var(--dim);margin:0 0 34px}
+  #ov .big{font-size:18px;padding:12px 30px;border-radius:30px;background:#4f8cff;color:#fff;border:none;cursor:pointer}
+  #ov .sum{font-size:20px;line-height:1.9;text-align:left}
+  #ov .sum b{color:var(--gold)}
+  #ov .path{margin-top:22px;font-family:Menlo,monospace;font-size:15px;color:#c7d2fe;background:#121a2e;border:1px solid var(--line);
+    padding:14px 22px;border-radius:10px;line-height:1.9;white-space:pre}
+  /* controls */
+  #ctrl{position:absolute;left:0;right:0;top:732px;height:44px;display:flex;align-items:center;gap:12px;padding:0 6px}
+  #ctrl button{background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;min-width:40px;
+    font-size:15px;cursor:pointer;padding:0 10px}
+  #ctrl button:hover{background:#26325a}
+  #ctrl a.home{display:flex;align-items:center;background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;padding:0 10px;font-size:13px;text-decoration:none;white-space:nowrap}
+  #ctrl a.home:hover{background:#26325a}
+  #bar{flex:1;display:flex;gap:3px;height:10px;cursor:pointer}
+  #bar div{flex:1;background:#232d4b;border-radius:3px;position:relative;overflow:hidden}
+  #bar div.done{background:#4f8cff}
+  #bar div.cur::after{content:'';position:absolute;left:0;top:0;bottom:0;background:#4f8cff;animation:fill var(--d) linear forwards}
+  #bar div.cur.paused::after{animation-play-state:paused}
+  @keyframes fill{from{width:0}to{width:100%}}
+  #time{font-size:13px;color:var(--dim);width:64px;text-align:right}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <div id="top"><div id="stitle"></div><div id="code"></div></div>
+
+    <div class="panel" id="pGPU"><h3>① 8 张卡上的 KV pool <small>每卡存哪些 head、哪些层、哪些 token</small></h3><div id="gpus"></div></div>
+    <div class="panel" id="pCfg"><h3>② 并行配置 <small>由 tp / dp / pp / cp / dcp 推出 attn_tp</small></h3><div id="cfg"></div></div>
+    <div class="panel" id="pLed"><h3>③ 单卡账本 <small>每卡 40 GB 留给 KV（假设值）</small></h3><div id="led"></div></div>
+    <div class="panel" id="pTab"><h3>④ 对比 <small>每换一种配置记一行</small></h3><div id="tab"></div></div>
+
+    <div id="cap"></div>
+    <div id="ov"></div>
+  </div>
+
+  <div id="ctrl">
+    <a class="home" href="../index.html" title="返回目录">☰ 目录</a>
+    <button id="bprev" title="上一步 (←)">⏮</button>
+    <button id="bplay" title="自动演示/暂停 (空格)">▶</button>
+    <button id="bnext" title="下一步 (→)">⏭</button>
+    <div id="bar"></div>
+    <div id="time"></div>
+    <button id="bvoice" title="中文语音朗读">🔇 朗读</button>
+  </div>
+</div>
+
+<script>
+const KV_BYTES = 40 * 1024 ** 3;            // 每卡留给 KV 的显存（假设值）
+const HC = ['#4f8cff','#22c55e','#f59e0b','#ec4899','#06b6d4','#f97316','#84cc16','#e879f9'];
+const RC = {A:'#4f8cff', B:'#22c55e'};
+const PAGES = ['A0','A1','A2','A3','B0','B1','B2','B3'];   // 两个请求，各 4 页
+const MODELS = {
+  A:{name:'模型 A · GQA', layers:64, brief:'64 层 · head_dim 128 · bf16', desc:'64 层 · <b>8 个 KV head</b> · head_dim 128 · bf16 · 每 head 每层每 token K+V = <b>512 B</b>'},
+  B:{name:'模型 B · MLA', layers:61, brief:'61 层 · latent 576 维 · bf16', desc:'61 层 · latent <b>576 维</b>（512 + 64 rope）· bf16 · 每层每 token = <b>1152 B</b>'},
+};
+
+/* 由并行配置推出每张卡的 KV 形状；所有步骤都调用它，不手写每张卡 */
+function layout(c){
+  const attnTp = c.tp / c.dp / c.cp;        // derive_attention_widths: tp // dp // cp
+  const kvTp = attnTp / c.dcp;              // get_num_kv_heads: tp // dcp
+  const L = MODELS[c.model].layers, perStage = L / c.pp, stageSize = 8 / c.pp;
+  const cards = [];
+  for(let i=0;i<8;i++){
+    const stage = Math.floor(i / stageSize), j = i % stageSize;
+    const grp = Math.floor(j / attnTp), r = j % attnTp;          // grp = DP 组或 CP rank
+    // DCP 组是 TP 组里连续的 dcp 张卡（parallel_state.py:2661），组内同 head、按 token 交错
+    const dcpRank = r % c.dcp, hg = Math.floor(r / c.dcp);
+    let heads, dup=false, cell;
+    if(c.model==='B'){ heads=['latent']; cell = perStage * 1152; }
+    else {
+      const n = Math.max(1, Math.floor(c.H / kvTp));
+      if(c.H >= kvTp) heads = Array.from({length:n}, (_,k)=>hg*n+k);
+      else { heads = [Math.floor(hg / (kvTp / c.H))]; dup = true; }   // 连续 rank 共享一个 head
+      cell = n * perStage * 512;
+    }
+    const own = PAGES.map((p,pi)=>{
+      const req=p[0], P=pi%4;
+      if(c.dp>1) return (c.dp===2 ? grp===(req==='A'?0:1) : grp===(req==='A'?0:req==='B'?1:-1));
+      if(c.dcp>1) return 'part';
+      return true;
+    });
+    let badge = `TP r${r}`;
+    if(c.dp>1) badge = `DP${grp} · r${r}`;
+    else if(c.pp>1) badge = `PP${stage} · r${r}`;
+    else if(c.cp>1) badge = `CP${grp} · r${r}`;
+    else if(c.dcp>1) badge = `dcp r${dcpRank}`;
+    cards.push({heads, dup, layers:[stage*perStage, stage*perStage+perStage-1], L, own, cell,
+                cap:Math.floor(KV_BYTES / cell), badge, idle: own.every(x=>!x)});
+  }
+  return {attnTp, kvTp, cards};
+}
+function rowLabels(c){
+  if(c.dp===2) return ['<b>DP 组 0</b> · 独立 pool + radix tree', '<b>DP 组 1</b> · 独立 pool + radix tree'];
+  if(c.dp===8) return ['<b>每张卡一个 DP 组</b> · 8 个独立 pool',''];
+  if(c.pp>1)   return ['<b>PP stage 0</b> · 第 0–31 层', '<b>PP stage 1</b> · 第 32–63 层'];
+  if(c.cp>1)   return ['<b>CP rank 0</b> · 与 CP rank 1 存相同的 KV', '<b>CP rank 1</b>'];
+  if(c.dcp===8)return ['<b>8 张卡组成一个 DCP 组</b> · 每页的 token 按 pos % 8 交错存放（条纹 = 只存 1/8）',''];
+  if(c.dcp===2)return ['<b>DCP 组 [G0,G1] [G2,G3] …</b> · 组内两卡同 head，分别存 pos % 2 == 0 / 1 的 token', ''];
+  return ['<b>8 张卡组成一个 attn TP 组</b> · 共用一个 pool',''];
+}
+
+let S;
+function init(){ S = {cfg:null, rows:[], ledger:'', overlay:null}; clearTransient(); }
+function clearTransient(){ S.focus=[]; S.hlCards=[]; S.hlPages=false; S.curRow=-1; }
+function cfg(o){ S.cfg = Object.assign({model:'A', H:8, tp:8, dp:1, pp:1, cp:1, dcp:1}, o); }
+function wan(x){ return (x/1e4).toFixed(1) + ' 万'; }
+function kb(x){ return (x/1024).toFixed(x%1024?1:0) + ' KB'; }
+function addRow(label, o){
+  const lay = layout(S.cfg), c0 = lay.cards[0];
+  const nl = c0.layers[1] - c0.layers[0] + 1;
+  const per = S.cfg.model==='B' ? `latent×${nl}` : `${c0.heads.length}×${nl}`;
+  S.rows.push(Object.assign({label, per, cell:kb(c0.cell), cap:wan(c0.cap)}, o));
+  S.curRow = S.rows.length - 1;
+}
+
+const steps = [
+ { title:'', code:'', dur:5000,
+   cap:'同一个模型、同样 8 张卡，换不同的并行方式，<em>每张卡上的 KV pool 长什么样、能存多少 token</em>？',
+   act(){ S.overlay='title'; } },
+
+ { title:'设定', code:'', dur:9000,
+   cap:'8 张卡，每卡留 <em>40 GB</em> 给 KV。两个请求 A、B 各 4 页 token。先看 GQA 模型 A，最后换成 MLA 模型 B。',
+   act(){ S.ledger=`<span class="c"># 两个模型</span>
+模型 A (GQA)：64 层，8 个 KV head，head_dim 128，bf16
+  每 head 每层每 token：128 × 2 (K,V) × 2 B = <span class="y">512 B</span>
+模型 B (MLA)：61 层，latent 576 维，bf16
+  每层每 token：576 × 2 B = <span class="y">1152 B</span>
+<span class="c"># 容量 = 40 GB ÷ 每 token 在这张卡上占的字节</span>`;
+     S.focus=['pGPU','pLed']; } },
+
+ { title:'TP=8：按 head 切', code:'model_config.py:1416  get_num_kv_heads', dur:9500,
+   cap:'TP=8 时，8 个 KV head 分给 8 张卡，<em>每卡 1 个 head</em>，但每卡都存<em>全部 64 层</em>、所有请求的 token。',
+   act(){ cfg({}); S.ledger=`<span class="c"># 每卡几个 KV head</span>
+get_num_kv_heads(tp=8, dcp=1)
+  = max(1, total_kv_heads // (tp // dcp))
+  = max(1, 8 // 8) = <span class="y">1</span>`;
+     S.focus=['pGPU','pCfg']; } },
+
+ { title:'账本：每 token 占多少', code:'pool_configurator.py:415  _compute_cell_size', dur:9000,
+   cap:'一个 token 在一张卡上占：<em>1 head × 64 层 × 512 B = 32 KB</em>。这个数在代码里叫 <code>cell_size</code>。',
+   act(){ cfg({}); S.ledger=`<span class="c"># _compute_cell_size（非 MLA 分支）</span>
+cell_size = n_heads × (head_dim + v_head_dim)
+            × 层数 × dtype 字节
+          = 1 × (128 + 128) × 64 × 2
+          = <span class="y">32 KB</span> / token / 卡`;
+     S.focus=['pLed']; } },
+
+ { title:'容量', code:'pool_configurator.py:549  calculate_pool_sizes', dur:10000,
+   cap:'每卡 40 GB ÷ 32 KB ≈ <em>131 万 token</em>。每个 token 的 KV 分散在 8 张卡上，所以整个系统也只能存 131 万。',
+   act(){ cfg({}); S.ledger=`<span class="c"># calculate_pool_sizes</span>
+max_total_num_tokens = available_bytes // cell_size
+                     = 40 GB // 32 KB = <span class="y">131.1 万</span>
+
+<span class="c"># 8 张卡共同存同一批 token，各存 1/8 的 head</span>
+系统可存 = 单卡容量 = <span class="y">131.1 万</span>`;
+     addRow('TP=8', {sys:'131.1 万', single:'131.1 万', share:'全局'});
+     S.focus=['pLed','pTab']; } },
+
+ { title:'边界：head 不够分', code:'model_config.py:1427  max(1, …)', dur:10500,
+   cap:'若模型只有 <em>4 个 KV head</em>，TP=8 时每卡仍分到 1 个，<em>同一个 head 存 2 份</em>，每卡容量不变，省不了显存。',
+   act(){ cfg({H:4}); S.hlCards=[0,1]; S.ledger=`<span class="c"># 4 个 KV head，TP=8</span>
+max(1, 4 // 8) = <span class="y">1</span>   <span class="c"># 不会是 0.5</span>
+连续 2 张卡共享一个 head：r // (8 // 4)
+G0、G1 都存 h0 … G6、G7 都存 h3
+cell_size 仍是 32 KB → 容量仍 <span class="y">131.1 万</span>
+<span class="r">一半的 KV 显存在存重复数据</span>`;
+     addRow('TP=8（4 head）', {sys:'131.1 万', single:'131.1 万', share:'全局', note:'bad'});
+     S.focus=['pGPU','pLed']; } },
+
+ { title:'DP attention：attn_tp 变小', code:'runtime_context.py:148  derive_attention_widths', dur:10000,
+   cap:'开 DP attention（tp=8, dp=2）后，<em>attn_tp = 8 // 2 = 4</em>。KV 只在 4 张卡内按 head 切，每卡 2 个 head。',
+   act(){ cfg({dp:2}); S.ledger=`<span class="c"># derive_attention_widths</span>
+attn_dp_size = dp_size = 2
+attn_tp_size = tp // attn_dp // attn_cp = 8 // 2 // 1 = <span class="y">4</span>
+
+get_num_kv_heads(4) = 8 // 4 = <span class="y">2</span> 个 head / 卡`;
+     S.focus=['pCfg','pGPU']; } },
+
+ { title:'DP：两套独立的 pool', code:'data_parallel_controller.py:767  round_robin_scheduler', dur:10000,
+   cap:'两个 DP 组各有<em>独立的 KV pool 和 radix tree</em>。请求整体分派到某一组：A 只在组 0，B 只在组 1。',
+   act(){ cfg({dp:2}); S.hlPages=true; S.ledger=`<span class="c"># DataParallelController 把整个请求派给一个 DP 组</span>
+A → DP 组 0（G0–G3）
+B → DP 组 1（G4–G7）
+
+<span class="c"># 两组的 radix tree 互不可见</span>
+<span class="r">A、B 前缀相同也不能互相复用</span>`;
+     S.focus=['pGPU']; } },
+
+ { title:'DP：容量怎么算', code:'pool_configurator.py:549  calculate_pool_sizes', dur:10500,
+   cap:'每 token 每卡 64 KB，每卡 65.5 万。系统合计 <em>131 万</em>，但<em>单个请求最多只能用 65.5 万</em>。',
+   act(){ cfg({dp:2}); S.ledger=`cell_size = 2 head × 256 × 64 层 × 2 B = <span class="y">64 KB</span>
+每卡容量 = 40 GB // 64 KB = <span class="y">65.5 万</span>
+
+系统可存 = 2 组 × 65.5 万 = <span class="y">131.1 万</span>
+单请求上限 = 一组的容量 = <span class="r">65.5 万</span>`;
+     addRow('DP attn 2', {sys:'131.1 万', single:'65.5 万', share:'组内', note:'single'});
+     S.focus=['pLed','pTab']; } },
+
+ { title:'PP=2 × TP=4：按层切', code:'distributed/utils.py:95  get_pp_indices', dur:10000,
+   cap:'PP 按层切：<em>stage 0 存第 0–31 层，stage 1 存第 32–63 层</em>。每个 stage 内再按 TP=4 切 head。',
+   act(){ cfg({tp:4, pp:2}); S.ledger=`<span class="c"># get_pp_indices：尽量均分</span>
+stage 0：[0, 32)    stage 1：[32, 64)
+<span class="c"># 每个 stage 内 attn_tp = 4</span>
+get_num_kv_heads(4) = 8 // 4 = <span class="y">2</span> 个 head / 卡`;
+     S.focus=['pGPU','pCfg']; } },
+
+ { title:'PP：层减半，head 加倍', code:'layer_setup.py:155  num_effective_layers', dur:9500,
+   cap:'每卡层数减半、head 翻倍，每 token 仍是 <em>32 KB</em>，容量还是 <em>131 万</em>，和 TP=8 一样。',
+   act(){ cfg({tp:4, pp:2}); S.ledger=`num_effective_layers = end_layer - start_layer = <span class="y">32</span>
+cell_size = 2 head × 256 × 32 层 × 2 B = <span class="y">32 KB</span>
+每卡容量 = <span class="y">131.1 万</span>
+
+<span class="c"># 每个 token 的 KV：按层分到 2 个 stage，按 head 分到 4 张卡</span>`;
+     addRow('PP 2 × TP 4', {sys:'131.1 万', single:'131.1 万', share:'全局'});
+     S.focus=['pLed','pTab']; } },
+
+ { title:'Prefill CP=2：按序列切计算', code:'layers/cp/base.py:123  shard_hidden_states', dur:10500,
+   cap:'Prefill 开 CP=2（tp=8）：<em>attn_tp = 8 // 2 = 4</em>，每卡 2 个 head。计算时把一条长序列切成 2 段并行算。',
+   act(){ cfg({cp:2}); S.ledger=`attn_tp_size = 8 // 1 // 2 = <span class="y">4</span>
+get_num_kv_heads(4) = <span class="y">2</span> 个 head / 卡
+
+<span class="c"># CP group = [G0,G4] [G1,G5] [G2,G6] [G3,G7]</span>
+<span class="c"># 同一列的两张卡负责同一组 head、不同的序列段</span>`;
+     S.focus=['pCfg','pGPU']; } },
+
+ { title:'CP：KV 存两份', code:'layers/cp/base.py:140  gather_kv_cache', dur:11000,
+   cap:'写入 pool 前 KV 会 gather 回完整顺序，<em>两个 CP rank 存相同的 KV</em>，每卡容量降到 65.5 万，用显存换 prefill 速度。',
+   act(){ cfg({cp:2}); S.hlCards=[0,4]; S.ledger=`<span class="c"># gather_kv_cache：把各 rank 的 KV 拼回完整 token 顺序</span>
+cell_size = 64 KB → 每卡 <span class="y">65.5 万</span>
+系统可存 = <span class="r">65.5 万</span>（两份相同）
+
+<span class="c"># DSA 模型可开按层切分：dsa_cache_layer_split.py:159</span>
+<span class="c"># Decode 侧要求 attn_cp_size == 1：common/conn.py:983</span>`;
+     addRow('Prefill CP 2', {sys:'65.5 万', single:'65.5 万', share:'全局', note:'sys'});
+     S.focus=['pGPU','pLed','pTab']; } },
+
+ { title:'换成 MLA：没有 head 维度', code:'pool_configurator.py:344  calculate_mla_kv_cache_dim', dur:11000,
+   cap:'MLA 的 KV 是一个 latent 向量，<em>没有 head 可切</em>。TP=8 时 8 张卡<em>各存一份完整的</em>，系统只有 61 万。',
+   act(){ cfg({model:'B'}); S.ledger=`<span class="c"># MLA 分支</span>
+cell_size = kv_cache_dim × 层数 × dtype 字节
+          = 576 × 61 × 2 = <span class="y">68.6 KB</span>
+每卡容量 = 40 GB // 68.6 KB = <span class="y">61.1 万</span>
+
+<span class="r">8 张卡内容完全相同 → 系统也只有 61.1 万</span>`;
+     addRow('MLA · TP=8', {sys:'61.1 万', single:'61.1 万', share:'全局', note:'sys'});
+     S.focus=['pGPU','pLed','pTab']; } },
+
+ { title:'MLA + DP attention 8', code:'runtime_context.py:148  derive_attention_widths', dur:10500,
+   cap:'MLA 常配 DP attention：attn_tp = 1，<em>8 张卡 8 个独立 pool</em>。系统合计 489 万，单请求仍只能用 61 万。',
+   act(){ cfg({model:'B', dp:8}); S.ledger=`attn_tp_size = 8 // 8 // 1 = <span class="y">1</span>
+每张卡自己是一个 DP 组，存不同的请求
+每卡容量 = <span class="y">61.1 万</span>
+
+系统可存 = 8 × 61.1 万 = <span class="y">489.0 万</span>
+单请求上限 = <span class="r">61.1 万</span>，前缀只能组内复用`;
+     addRow('MLA · DP attn 8', {sys:'489.0 万', single:'61.1 万', share:'组内', note:'single'});
+     S.focus=['pGPU','pLed','pTab']; } },
+
+ { title:'MLA + DCP 8：按页切 token', code:'kv_cache_configurator.py:2209  PagedTokenToKVPoolAllocator', dur:11500,
+   cap:'DCP 把<em>每个 token 按 pos % 8 交错分到 8 张卡</em>，每卡只存 1/8。8 张卡合成一个 <em>489 万的共享 pool</em>。',
+   act(){ cfg({model:'B', dcp:8}); S.hlPages=true; S.ledger=`<span class="c"># allocator 的总容量和页大小都乘以 dcp</span>
+PagedTokenToKVPoolAllocator(
+  max_total_num_tokens × 8,   page_size × 8)
+<span class="c"># token 归属：pos % 8 == dcp_rank   dcp/layout.py:23</span>
+每卡物理 61.1 万 → 逻辑 pool <span class="y">489.0 万</span>
+单请求上限 = <span class="g">489.0 万</span>，前缀全局共享`;
+     addRow('MLA · DCP 8', {sys:'489.0 万', single:'489.0 万', share:'全局', note:'good'});
+     S.focus=['pGPU','pLed','pTab']; } },
+
+ { title:'对比：GQA + DCP 2', code:'model_config.py:1426  kv_tensor_parallel_size', dur:11500,
+   cap:'GQA 开 DCP 2：head 只按 <em>tp // dcp = 4</em> 组切，每卡 2 个 head、存一半的 token，逻辑容量还是 131 万，<em>没有省</em>。',
+   act(){ cfg({dcp:2}); S.hlPages=true; S.ledger=`kv_tensor_parallel_size = tp // dcp = 8 // 2 = <span class="y">4</span>
+每卡 2 head，cell_size = <span class="y">64 KB</span> → 物理 65.5 万
+逻辑 pool = 65.5 万 × 2 = <span class="y">131.1 万</span>  <span class="c"># 与 TP=8 相同</span>
+
+<span class="c"># 只有 4 个 KV head 时：4 // 4 = 1 head，不再重复存</span>
+cell 32 KB → 131.1 万 × 2 = <span class="g">262.1 万</span>`;
+     addRow('GQA · DCP 2', {sys:'131.1 万', single:'131.1 万', share:'全局'});
+     S.focus=['pGPU','pLed','pTab']; } },
+
+ { title:'各种并行在 KV 上的取舍', code:'', dur:12000,
+   cap:'TP、PP 把每个 token 的 KV <em>切开</em>；DP <em>复制出独立 pool</em>；CP <em>多存一份</em>换速度；DCP <em>按页切 token</em>。',
+   act(){ cfg({model:'B', dcp:8}); S.ledger=`切开 KV   TP（按 head）  PP（按层）  DCP（按 token 交错）
+复制 pool DP attention：总量涨，单请求上限和前缀共享变小
+多存一份  Prefill CP：用显存换 prefill 速度
+
+<span class="c"># head 够分的 GQA：TP 就够了，DCP 不省显存</span>
+<span class="c"># MLA 或 head 不够分：靠 DCP 去掉重复存储</span>`;
+     S.focus=['pTab','pLed']; } },
+
+ { title:'', code:'', dur:13000,
+   cap:'沿着这 5 个位置打断点，对照启动日志里的 max_total_num_tokens 验证你算出的容量。',
+   act(){ S.overlay='summary'; } },
+];
+
+/* ---------------- render ---------------- */
+const $ = id => document.getElementById(id);
+
+function gpuHTML(card, i){
+  const hl = S.hlCards.includes(i);
+  const chips = card.heads.map(h => h==='latent'
+      ? `<span class="hchip" style="--c:var(--L)">latent</span>`
+      : `<span class="hchip${card.dup?' dup':''}" style="--c:${HC[h]}">h${h}</span>`).join('');
+  const L = card.L, s = card.layers[0], e = card.layers[1];
+  const pages = PAGES.map((p,k)=>`<div class="pg${card.own[k]==='part'?' part':card.own[k]?' own':''}" style="--c:${RC[p[0]]}">${p}</div>`).join('');
+  return `<div class="gpu${hl?' hl':''}${card.idle?' idle':''}">
+    <div class="ghead"><span class="nm">G${i}</span><span class="bd">${card.badge}</span></div>
+    <div><div class="lbl">KV head</div><div class="chips">${chips}</div></div>
+    <div><div class="lbl">层</div><div class="lbar"><i style="left:${s/L*100}%;width:${(e-s+1)/L*100}%"></i></div>
+         <div class="ltxt">L${s}–${e}（${e-s+1} 层）</div></div>
+    <div><div class="lbl">token</div><div class="pages${S.hlPages?' hl':''}">${pages}</div></div>
+    <div class="gfoot">每 token <b>${kb(card.cell)}</b><br>每卡容量 <b>${wan(card.cap)}</b></div>
+  </div>`;
+}
+function gpusHTML(){
+  if(!S.cfg){
+    const blank = i=>`<div class="gpu"><div class="ghead"><span class="nm">G${i}</span></div><span class="empty">等待并行配置……</span></div>`;
+    return `<div class="rowlab"></div><div class="grow">${[0,1,2,3].map(blank).join('')}</div>
+            <div class="rowlab"></div><div class="grow">${[4,5,6,7].map(blank).join('')}</div>`;
+  }
+  const lay = layout(S.cfg), labs = rowLabels(S.cfg);
+  return [0,1].map(r=>`<div class="rowlab">${labs[r]}</div><div class="grow">${
+    [0,1,2,3].map(k=>gpuHTML(lay.cards[r*4+k], r*4+k)).join('')}</div>`).join('');
+}
+function cfgHTML(){
+  const c = S.cfg;
+  if(!c) return `<div class="m"><b>${MODELS.A.name}</b> · 8 个 KV head · ${MODELS.A.brief}</div><div class="m"><b>${MODELS.B.name}</b> · ${MODELS.B.brief}</div><div class="m">每卡 40 GB 留给 KV（假设值）</div>`;
+  const lay = layout(c), m = MODELS[c.model];
+  const k = (n,v)=>`<span class="k${v>1?' on':''}">${n}=${v}</span>`;
+  const heads = c.model==='B' ? '' : `，${c.H} 个 KV head`;
+  return `<div class="m"><b>${m.name}</b>${heads} · ${m.brief}</div>
+    <div class="knobs">${k('tp',c.tp)}${k('dp',c.dp)}${k('pp',c.pp)}${k('cp',c.cp)}${k('dcp',c.dcp)}</div>
+    <div class="f">attn_tp = tp // dp // cp = ${c.tp} // ${c.dp} // ${c.cp} = <b>${lay.attnTp}</b>`+
+    (c.model==='B' ? '' : `　　按 head 切的组数 = attn_tp // dcp = <b>${lay.kvTp}</b>`)+`</div>`;
+}
+function tabHTML(){
+  if(!S.rows.length) return '<span class="ph">每看完一种配置，在这里记一行。</span>';
+  const cls = (r,col)=> r.note===col ? (col==='good'?'good':'bad') : '';
+  return `<table><tr><th>配置</th><th>每卡 head×层</th><th>每卡每 token</th><th>每卡容量</th><th>系统可存</th><th>单请求上限</th><th>前缀共享</th></tr>${
+    S.rows.map((r,i)=>`<tr class="${i===S.curRow?'cur':''}">
+      <td>${r.label}</td><td>${r.per}</td><td>${r.cell}</td><td>${r.cap}</td>
+      <td class="${r.note==='sys'||r.note==='bad'?'bad':r.note==='good'?'good':''}">${r.sys}</td>
+      <td class="${r.note==='single'?'bad':r.note==='good'?'good':''}">${r.single}</td>
+      <td class="${r.share==='组内'?'bad':''}">${r.share}</td></tr>`).join('')}</table>`;
+}
+
+function render(i){
+  const st = steps[i];
+  $('stitle').innerHTML = st.title ? `<span class="no">${String(i).padStart(2,'0')}</span>${st.title}` : '';
+  $('code').textContent = st.code;
+  $('cap').innerHTML = `<span>${st.cap}</span>`;
+  $('gpus').innerHTML = gpusHTML();
+  $('cfg').innerHTML = cfgHTML();
+  const l=$('led'); l.innerHTML = S.ledger || '<span class="ph">选定并行配置后，这里算每张卡的账。</span>';
+  l.style.animation='none'; void l.offsetWidth; l.style.animation='';
+  $('tab').innerHTML = tabHTML();
+  ['pGPU','pCfg','pLed','pTab'].forEach(id=>$(id).classList.toggle('focus', S.focus.includes(id)));
+
+  const ov=$('ov');
+  if(S.overlay==='title'){
+    ov.innerHTML = `<h1>并行如何切 KV</h1><h2>SGLang KV Cache 系列 05 · TP / DP attention / PP / CP / DCP · 约 3 分钟</h2>`+
+      (started ? '' : `<button class="big" onclick="play()">▶ 开始演示</button>`);
+    ov.classList.remove('hide');
+  } else if(S.overlay==='summary'){
+    ov.innerHTML = `<h1 style="font-size:40px">一句话记住</h1>
+      <div class="sum"><b>TP / PP / DCP</b> 把 KV 切开：按 head、按层、按 token 交错<br>
+      <b>DP attention</b> 复制出独立 pool：总量涨，单请求上限和前缀共享变小<br>
+      <b>Prefill CP</b> 多存一份换速度 · <b>MLA</b> 没有 head，靠 DCP 去掉重复</div>
+      <div class="path">1. model_config.py:1416        get_num_kv_heads        每卡几个 head
+2. runtime_context.py:148      derive_attention_widths attn_tp 怎么来
+3. pool_configurator.py:304    _compute_cell_size      每 token 字节
+4. pool_configurator.py:549    calculate_pool_sizes    每卡容量
+5. kv_cache_configurator.py:2209  PagedTokenToKVPoolAllocator  DCP 放大容量</div>`;
+    ov.classList.remove('hide');
+  } else ov.classList.add('hide');
+}
+
+/* ---------------- playback ---------------- */
+let cur=0, playing=false, started=false, timer=null, voice=false;
+const bar=$('bar');
+steps.forEach((s,k)=>{ const d=document.createElement('div'); d.title=s.title||(k?'总结':'概览'); d.onclick=()=>{goto(k); if(playing) schedule();}; bar.appendChild(d); });
+const total = steps.reduce((a,s)=>a+s.dur,0);
+
+function goto(i){
+  cur=Math.max(0,Math.min(steps.length-1,i));
+  init();
+  for(let k=0;k<=cur;k++){ clearTransient(); S.overlay=null; steps[k].act(); }
+  render(cur); updateBar(); speak();
+}
+function updateBar(){
+  [...bar.children].forEach((d,k)=>{
+    d.className = k<cur?'done':(k===cur?'cur':''); d.style.setProperty('--d', steps[k].dur+'ms');
+    if(k===cur && !playing) d.classList.add('paused');
+  });
+  const el = steps.slice(0,cur).reduce((a,s)=>a+s.dur,0)/1000;
+  $('time').textContent = `${fmt(el)} / ${fmt(total/1000)}`;
+  $('bplay').textContent = playing ? '⏸' : '▶';
+}
+function fmt(s){ s=Math.round(s); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+function schedule(){ clearTimeout(timer); timer=setTimeout(advance, steps[cur].dur); }
+function advance(){
+  // 开着朗读时，等这句读完再进入下一步
+  if(voice && speechSynthesis.speaking){ timer=setTimeout(advance, 300); return; }
+  if(cur>=steps.length-1){ playing=false; updateBar(); return; }
+  goto(cur+1); schedule();
+}
+function play(){ started=true; if(cur===steps.length-1) goto(0);
+  if(cur===0) goto(1); playing=true; updateBar(); schedule(); }
+function pause(){ playing=false; clearTimeout(timer); speechSynthesis.cancel(); updateBar(); }
+function toggle(){ playing?pause():play(); }
+
+function speak(){
+  if(!voice || !('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const txt = steps[cur].cap.replace(/<[^>]+>/g,'').replace(/&[a-z]+;/g,'').replace(/_/g,' ').replace(/\/\//g,'整除');
+  const u = new SpeechSynthesisUtterance(txt); u.lang='zh-CN'; u.rate=1.08;
+  const zh = speechSynthesis.getVoices().find(v=>/zh[-_]CN/i.test(v.lang)); if(zh) u.voice=zh;
+  speechSynthesis.speak(u);
+}
+
+$('bplay').onclick=toggle;
+$('bprev').onclick=()=>{ goto(cur-1); if(playing) schedule(); };
+$('bnext').onclick=()=>{ started=true; goto(cur+1); if(playing) schedule(); };
+$('bvoice').onclick=()=>{ voice=!voice; $('bvoice').textContent = voice?'🔊 朗读':'🔇 朗读'; if(voice) speak(); else speechSynthesis.cancel(); };
+document.addEventListener('keydown',e=>{
+  if(e.code==='Space'){ e.preventDefault(); toggle(); }
+  else if(e.code==='ArrowRight') $('bnext').onclick();
+  else if(e.code==='ArrowLeft') $('bprev').onclick();
+});
+
+function fit(){ const s=Math.min(innerWidth/1300, innerHeight/800); $('wrap').style.transform=`translate(-50%,-50%) scale(${s})`; }
+addEventListener('resize', fit); fit();
+goto(0);
+</script>
+</body>
+</html>

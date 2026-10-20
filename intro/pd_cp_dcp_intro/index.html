@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>CP/DCP 下的 PD 传输 · SGLang KV Cache 系列 07</title>
+<style>
+  :root{--bg:#0b1020;--panel:#121a2e;--line:#26314d;--text:#e6ebf5;--dim:#8a96b3;--gold:#facc15;--red:#ef4444}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#05070f;color:var(--text);
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;overflow:hidden}
+  #wrap{position:absolute;left:50%;top:50%;width:1280px;height:780px;transform-origin:center center}
+  #stage{position:relative;width:1280px;height:720px;background:var(--bg);border-radius:14px;overflow:hidden;
+    box-shadow:0 20px 60px rgba(0,0,0,.6)}
+  code,.mono{font-family:Menlo,Consolas,monospace}
+  /* top bar */
+  #top{position:absolute;left:24px;right:24px;top:16px;height:44px;display:flex;align-items:center;justify-content:space-between}
+  #stitle{font-size:24px;font-weight:700;letter-spacing:.5px}
+  #stitle .no{color:var(--dim);font-weight:500;margin-right:10px;font-size:18px}
+  #code{font-family:Menlo,Consolas,monospace;font-size:14px;color:#c7d2fe;background:#1e2a4a;border:1px solid #334373;
+    padding:6px 12px;border-radius:8px;transition:opacity .3s}
+  #code:empty{opacity:0}
+  /* panels */
+  .panel{position:absolute;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 12px;
+    transition:box-shadow .3s,border-color .3s}
+  .panel h3{margin:0 0 6px;font-size:15px;display:flex;justify-content:space-between;align-items:baseline}
+  .panel h3 small{font-size:11.5px;color:var(--dim);font-weight:400}
+  .focus{border-color:#7aa2ff!important;box-shadow:0 0 0 2px rgba(122,162,255,.35),0 0 28px rgba(122,162,255,.25)}
+  #pP{left:24px;top:70px;width:330px;height:522px}
+  #pD{left:470px;top:70px;width:250px;height:522px}
+  #pHS{left:736px;top:70px;width:520px;height:214px}
+  #pPlan{left:736px;top:294px;width:520px;height:298px}
+  /* prefill cards */
+  .cplab{font-size:12px;color:var(--dim);margin:2px 0 5px;display:flex;align-items:center;gap:8px}
+  .cplab b{color:var(--text)}
+  .cplab .tagx{font-size:10.5px;padding:0 6px;border-radius:4px;border:1px solid #33416a;background:#18223d;color:#c7d2fe}
+  .prow{display:flex;gap:8px;margin-bottom:8px}
+  .card{background:#0e1527;border:1px solid #2a3656;border-radius:9px;transition:all .4s;animation:pop .4s ease-out;overflow:hidden}
+  .card.unused{opacity:.3}
+  .card.hl{border-color:var(--gold);box-shadow:0 0 16px rgba(250,204,21,.35)}
+  .pcard{width:149px;padding:6px 8px}
+  .ctitle{font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px;margin-bottom:4px}
+  .ctitle .bd{margin-left:auto;font-family:Menlo,monospace;font-size:9.5px;font-weight:400;padding:1px 5px;border-radius:5px;background:#1b2440;border:1px solid #33416a;color:#c7d2fe}
+  .pgrid{display:grid;grid-template-columns:16px 1fr;grid-auto-rows:18px;row-gap:3px;column-gap:5px}
+  .sl{font-family:Menlo,monospace;font-size:10px;color:var(--dim);display:flex;align-items:center;justify-content:flex-end}
+  .cell{border-radius:5px;border:1px solid #26314d;background:#0b1121;font-family:Menlo,monospace;font-size:11px;
+    display:flex;align-items:center;justify-content:center;transition:all .4s;color:#cbd5e1}
+  .cell.alloc{border:1.5px dashed var(--c);color:var(--c);background:color-mix(in srgb,var(--c) 8%,transparent)}
+  .cell.kv,.cell.recv{border:1.5px solid var(--c);background:color-mix(in srgb,var(--c) 42%,transparent);color:#fff}
+  .cell.recv{animation:land .6s ease-out}
+  .cell.hit{border:1.5px solid var(--gold);background:color-mix(in srgb,var(--c) 42%,transparent);color:#fff;box-shadow:0 0 10px rgba(250,204,21,.4)}
+  .cell.hl{box-shadow:0 0 0 2px var(--gold),0 0 14px rgba(250,204,21,.55)}
+  @keyframes land{0%{transform:scale(1.35);filter:brightness(1.8)}100%{transform:none;filter:none}}
+  @keyframes pop{from{transform:scale(.9);opacity:0}to{transform:scale(1);opacity:1}}
+  /* decode cards */
+  .dcard{padding:4px 8px;margin-bottom:6px;height:112px;display:flex;flex-direction:column}
+  .dcard .ctitle{margin-bottom:1px}
+  .drule{font-family:Menlo,monospace;font-size:10px;color:var(--dim);margin-bottom:2px;min-height:14px}
+  .drule b{color:var(--text);font-weight:600}
+  .dgrid{display:grid;grid-template-columns:16px 1fr;grid-auto-rows:14px;row-gap:2px;column-gap:5px}
+  .dgrid .cell{font-size:10px}
+  /* handshake */
+  #hs{font-size:12.5px;line-height:1.5}
+  .maprow{display:flex;align-items:center;gap:7px;margin-bottom:4px;animation:pop .35s ease-out}
+  .tag{font-family:Menlo,monospace;font-weight:700;font-size:12px;padding:0 7px;border-radius:5px;background:#1b2440;border:1px solid #33416a}
+  .tag.off{opacity:.4;font-weight:400}
+  .ar{color:var(--dim);font-family:Menlo,monospace;font-size:11px}
+  .checks{display:grid;grid-template-columns:auto 1fr;gap:3px 8px;margin-top:6px;font-size:12px;align-items:center}
+  .ck{font-family:Menlo,monospace;font-weight:700;animation:pop .35s ease-out}
+  .ck.ok{color:#86efac}.ck.no{color:#fca5a5}
+  .ckt{animation:fadein .4s ease-out}
+  .ckt code{font-size:11px;color:#c7d2fe}
+  .cols{display:flex;gap:18px}
+  /* plan */
+  #plan{font-family:Menlo,Consolas,monospace;font-size:12.2px;line-height:1.58;white-space:pre;color:#dbe4ff;animation:fadein .45s ease-out}
+  #plan .c{color:var(--dim)}
+  #plan .y{color:var(--gold)}
+  #plan .g{color:#86efac}
+  #plan .r{color:#fca5a5}
+  #plan .on{background:rgba(250,204,21,.16);outline:1px solid rgba(250,204,21,.5);border-radius:3px}
+  .pack{display:inline-flex;gap:3px;vertical-align:middle}
+  .pack i{font-style:normal;font-size:11px;padding:0 6px;border-radius:4px;color:#fff;border:1px solid var(--c);background:color-mix(in srgb,var(--c) 45%,transparent)}
+  .ph{font-size:12.5px;color:var(--dim);font-style:italic}
+  /* arrows */
+  #arrows{position:absolute;inset:0;pointer-events:none;z-index:5}
+  #arrows .flow{stroke-dasharray:7 5;animation:flow .8s linear infinite}
+  #arrows .link{stroke-dasharray:3 5;opacity:.75}
+  #arrows .dim{opacity:.18}
+  @keyframes flow{to{stroke-dashoffset:-24}}
+  /* caption */
+  #cap{position:absolute;left:24px;right:24px;top:602px;height:104px;display:flex;align-items:center;justify-content:center;
+    text-align:center;font-size:20px;line-height:1.55;padding:0 30px;background:linear-gradient(180deg,rgba(18,26,46,.9),rgba(18,26,46,.6));
+    border:1px solid var(--line);border-radius:12px}
+  #cap span{animation:fadein .5s ease-out}
+  #cap em{font-style:normal;color:var(--gold)}
+  #cap code{font-size:17px;color:#c7d2fe}
+  @keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  /* overlay */
+  #ov{position:absolute;inset:0;background:radial-gradient(ellipse at center,#16224a 0%,#0b1020 70%);display:flex;flex-direction:column;
+    align-items:center;justify-content:center;transition:opacity .6s;z-index:10}
+  #ov.hide{opacity:0;pointer-events:none}
+  #ov h1{font-size:50px;margin:0 0 14px;letter-spacing:2px}
+  #ov h2{font-size:22px;font-weight:400;color:var(--dim);margin:0 0 34px}
+  #ov .big{font-size:18px;padding:12px 30px;border-radius:30px;background:#4f8cff;color:#fff;border:none;cursor:pointer}
+  #ov .sum{font-size:20px;line-height:1.9;text-align:left}
+  #ov .sum b{color:var(--gold)}
+  #ov .path{margin-top:22px;font-family:Menlo,monospace;font-size:15px;color:#c7d2fe;background:#121a2e;border:1px solid var(--line);
+    padding:14px 22px;border-radius:10px;line-height:1.9;white-space:pre}
+  /* controls */
+  #ctrl{position:absolute;left:0;right:0;top:732px;height:44px;display:flex;align-items:center;gap:12px;padding:0 6px}
+  #ctrl button{background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;min-width:40px;
+    font-size:15px;cursor:pointer;padding:0 10px}
+  #ctrl button:hover{background:#26325a}
+  #ctrl a.home{display:flex;align-items:center;background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;padding:0 10px;font-size:13px;text-decoration:none;white-space:nowrap}
+  #ctrl a.home:hover{background:#26325a}
+  #bar{flex:1;display:flex;gap:3px;height:10px;cursor:pointer}
+  #bar div{flex:1;background:#232d4b;border-radius:3px;position:relative;overflow:hidden}
+  #bar div.done{background:#4f8cff}
+  #bar div.cur::after{content:'';position:absolute;left:0;top:0;bottom:0;background:#4f8cff;animation:fill var(--d) linear forwards}
+  #bar div.cur.paused::after{animation-play-state:paused}
+  @keyframes fill{from{width:0}to{width:100%}}
+  #time{font-size:13px;color:var(--dim);width:64px;text-align:right}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <div id="top"><div id="stitle"></div><div id="code"></div></div>
+
+    <div class="panel" id="pP"><h3>① Prefill <small>tp=4 · cp=2 → attn_tp=2</small></h3><div id="pcards"></div></div>
+    <div class="panel" id="pD"><h3>④ Decode <small>tp=4 · dcp=4</small></h3><div id="dcards"></div></div>
+    <div class="panel" id="pHS"><h3>② 握手 <small>rank 映射 + 拓扑检查</small></h3><div id="hs"></div></div>
+    <div class="panel" id="pPlan"><h3>③ 传输计划 <small>每个 D rank 拿哪些 token，写到哪一行</small></h3><div id="plan"></div></div>
+
+    <svg id="arrows" viewBox="0 0 1280 720" width="1280" height="720"><defs id="adefs"></defs><g id="ag"></g></svg>
+
+    <div id="cap"></div>
+    <div id="ov"></div>
+  </div>
+
+  <div id="ctrl">
+    <a class="home" href="../index.html" title="返回目录">☰ 目录</a>
+    <button id="bprev" title="上一步 (←)">⏮</button>
+    <button id="bplay" title="自动演示/暂停 (空格)">▶</button>
+    <button id="bnext" title="下一步 (→)">⏭</button>
+    <div id="bar"></div>
+    <div id="time"></div>
+    <button id="bvoice" title="中文语音朗读">🔇 朗读</button>
+  </div>
+</div>
+
+<script>
+const DCP = 4;
+const N = 8;                                 // 请求 t0..t7
+const OC = ['#4f8cff','#22c55e','#f59e0b','#ec4899'];   // 按 pos % 4 着色 = 归哪个 D rank
+const PS = [6,1,4,7,0,3,2,5];                // Prefill 上 t_i 所在 slot（page_size=1，每卡相同）
+const VP = [1,2];                            // Decode 分配的两个虚拟页（每页 1 × 4 = 4 token）
+const P_CARDS = [{cp:0,a:0},{cp:0,a:1},{cp:1,a:0},{cp:1,a:1}];
+const mod = (x,m)=>((x%m)+m)%m;
+
+/* build_dcp_token_transfer_plan（common/utils.py:182）在 page_size=1 时的逐行翻译 */
+function dcpPlan({rank, srcPages, dstPages, pageOffset=0, prefix=0, n}){
+  const chunkStart = prefix + pageOffset;
+  const offs = [];
+  for(let o = mod(rank - chunkStart, DCP); o < n; o += DCP) offs.push(o);
+  const local = offs.map(o => Math.floor((pageOffset + o) / DCP));
+  return { phase: mod(rank - chunkStart, DCP), offs, local,
+           src: offs.map(o => srcPages[o]), dst: local.map(l => dstPages[l]) };
+}
+const tokOf = (o, base) => base + o;          // 第几个 token（相对请求）
+
+let S;
+function init(){
+  S = {
+    p: P_CARDS.map(()=>Array(8).fill(null)),
+    d: [0,1,2,3].map(()=>Array(4).fill(null)),
+    dRule:false, dFoot:'', pUnused:[false,false,false,false],
+    hs:{map:false, cpOnly:false, checks:[]},
+    plan:'', overlay:null,
+  };
+  clearTransient();
+}
+function clearTransient(){ S.focus=[]; S.hl=[]; S.hlCards=[]; S.arrows=[]; }
+
+function fillP(){ S.p.forEach(g=>PS.forEach((s,i)=>g[s]={t:i, st:'kv'})); }
+function allocD(pages=VP, base=0){
+  for(let r=0;r<DCP;r++) pages.forEach((v,k)=>{ S.d[r][v] = {t: base + k*DCP + r, st:'alloc'}; });
+}
+function recvD(r, toks, st='recv'){ toks.forEach(t=>{ const row = VP[Math.floor(t/DCP)]; S.d[r][row] = {t, st}; }); }
+function pRank(r){ return Math.floor(r / 2); }          // D 的 attn_tp=4，P 的 attn_tp=2：r // 2
+function arrowsFor(r, toks, kind){
+  const pc = pRank(r);
+  return toks.map(t=>({from:`p${pc}-s${PS[t]}`, fromCard:`pc${pc}`, to:`d${r}-s${VP[Math.floor(t/DCP)]}`, toCard:`dc${r}`,
+                       color:OC[t%DCP], kind:kind||'flow'}));
+}
+function links(){ return [0,1,2,3].map(r=>({fromCard:`pc${pRank(r)}`, toCard:`dc${r}`, color:'#64748b', kind:'link'})); }
+function check(ok, html){ S.hs.checks.push({ok, html}); }
+const fullPlan = r => dcpPlan({rank:r, srcPages:PS, dstPages:VP, n:N});
+
+const steps = [
+ { title:'', code:'', dur:5000,
+   cap:'Prefill 开 CP、Decode 开 DCP 时，一条长序列的 KV 怎么<em>按 token 交错</em>地对齐到 Decode 的 4 张卡上？',
+   act(){ S.overlay='title'; } },
+
+ { title:'设定', code:'', dur:9000,
+   cap:'MLA 模型，请求 8 个 token。Prefill 用 <em>cp=2</em>，Decode 用 <em>dcp=4</em>。颜色表示 token 最终归哪张 D 卡。',
+   act(){ S.plan=`<span class="c"># MLA：KV 是 latent 向量，没有 head 维度</span>
+kv_cache_dim = 512 + 64 = 576，bf16 → 每层每 token <span class="y">1152 B</span>
+
+<span class="c"># Prefill</span>  tp=4, cp=2 → attn_tp = 4 // 2 = <span class="y">2</span>
+<span class="c"># Decode</span>   tp=4, dcp=4 → attn_tp = <span class="y">4</span>，DCP 组 [D0..D3]
+page_size = 1，D 侧虚拟页 = 1 × 4 = <span class="y">4 token</span>`;
+     S.focus=['pP','pD']; } },
+
+ { title:'Prefill CP：每个 CP rank 都存完整 KV', code:'common/conn.py:913  _check_dcp_prefill_cp_compat', dur:10000,
+   cap:'CP 按序列切开计算，但 gather 之后<em>每个 CP rank 都按完整顺序存下全部 KV</em>。4 张 P 卡内容相同。',
+   act(){ fillP(); S.plan=`<span class="c"># _check_dcp_prefill_cp_compat 的说明</span>
+"Prefill CP materializes the full KV in global
+ token order on every CP rank, and by default
+ only CP rank 0 sends it"
+
+t_i 在每张 P 卡上都在 slot <span class="y">[${PS.join(',')}]</span>`;
+     S.focus=['pP']; } },
+
+ { title:'Decode DCP：按 pos % 4 交错存', code:'layers/dcp/layout.py:23  get_dcp_lens', dur:10000,
+   cap:'DCP 的规则是 <em>pos % 4 == rank</em>：D0 存 t0、t4，D1 存 t1、t5……每张卡只存 1/4 的 token。',
+   act(){ fillP(); S.dRule=true; S.plan=`<span class="c"># owner rule：pos % dcp_size == dcp_rank</span>
+D0：t0, t4      D1：t1, t5
+D2：t2, t6      D3：t3, t7
+
+get_dcp_lens(8) = 8 // 4 + (rank < 8 % 4) = <span class="y">2</span> 个 / 卡`;
+     S.focus=['pD','pPlan']; } },
+
+ { title:'Decode 预分配：虚拟页', code:'kv_index_translator.py:513  translate_dcp_read_ids', dur:10500,
+   cap:'D 的 allocator 按<em>虚拟页</em>分配（4 token 一页），给请求两页 <code>[1, 2]</code>。每张卡上的物理行号是 <em>loc // 4</em>。',
+   act(){ fillP(); S.dRule=true; allocD(); S.plan=`<span class="c"># allocator page = page_size × dcp = 4</span>
+虚拟页 <span class="y">[1, 2]</span> → 虚拟 loc 4..7, 8..11
+
+<span class="c"># translate_dcp_read_ids：widened // dcp_size</span>
+loc 4..7  // 4 = <span class="y">1</span>   → 每卡第 1 行
+loc 8..11 // 4 = <span class="y">2</span>   → 每卡第 2 行`;
+     S.focus=['pD','pPlan']; } },
+
+ { title:'握手检查 ①：必须是 MLA', code:'common/conn.py:904  PD decode DCP requires MLA', dur:8500,
+   cap:'D 开 DCP 时，先检查 KV pool <em>必须是 MLA</em>。GQA 的 head 已经被 TP 切开，再按 token 交错就对不上了。',
+   act(){ fillP(); S.dRule=true; allocD();
+     check(true, 'KV pool 是 MLA <code>common/conn.py:904</code>'); S.focus=['pHS']; } },
+
+ { title:'rank 映射：TP 维度', code:'common/conn.py:952  target_tp_rank', dur:9500,
+   cap:'D 的 attn_tp=4、P 的 attn_tp=2，所以 D 的 rank r 找 P 的 <em>r // 2</em>：D0、D1 找 P0，D2、D3 找 P1。',
+   act(){ fillP(); S.dRule=true; allocD(); S.hs.map=true; S.arrows=links();
+     check(true, 'KV pool 是 MLA <code>:904</code>');
+     S.plan=`<span class="c"># D_attn_tp(4) > P_attn_tp(2)</span>
+target_tp_rank = r // (4 // 2) = <span class="y">r // 2</span>
+required_dst_info_num = 4 // 2 = <span class="y">2</span>
+<span class="c"># 每张 P 卡要等 2 个 D rank 的元数据</span>`;
+     S.focus=['pHS']; } },
+
+ { title:'rank 映射：CP 维度', code:'common/conn.py:999  target_cp_ranks[:1]', dur:10000,
+   cap:'P 有 2 个 CP rank，但内容相同，<em>默认只从 CP rank 0 取</em>。P2、P3 不参与这次传输。',
+   act(){ fillP(); S.dRule=true; allocD(); S.hs.map=true; S.hs.cpOnly=true; S.pUnused=[false,false,true,true]; S.arrows=links();
+     check(true, 'KV pool 是 MLA <code>:904</code>');
+     check(true, 'target_cp_ranks = [0]，只连 CP rank 0 <code>:999</code>');
+     S.plan=`<span class="c"># _resolve_rank_mapping：CP 部分</span>
+target_cp_ranks = list(range(2))[:1] = <span class="y">[0]</span>
+required_prefill_response_num *= <span class="y">1</span>
+
+<span class="c"># 开了 all-CP-rank transfer 时会改为连所有 CP rank</span>
+<span class="c"># （和 DCP 不兼容，第 17 步）</span>`;
+     S.focus=['pHS','pP']; } },
+
+ { title:'判断是否需要重排', code:'common/conn.py:325  requires_dcp_relayout', dur:9500,
+   cap:'P 的 dcp=1、D 的 dcp=4，又是 MLA，所以 <code>requires_dcp_relayout = True</code>：传输时要<em>按 token 重排</em>。',
+   act(){ fillP(); S.dRule=true; allocD(); S.hs.map=true; S.hs.cpOnly=true; S.pUnused=[false,false,true,true]; S.arrows=links();
+     check(true, 'KV pool 是 MLA <code>:904</code>');
+     check(true, 'target_cp_ranks = [0] <code>:999</code>');
+     check(true, 'requires_dcp_relayout = True <code>:325</code>');
+     S.plan=`<span class="c"># requires_dcp_relayout(dst_dcp_size=4, dst_dcp_rank=r)</span>
+P.dcp == D.dcp ?          1 ≠ 4
+P.dcp == 1 且 D.dcp > 1 且 MLA ?   <span class="g">是 → True</span>
+其余组合 → <span class="r">Unsupported PD DCP topology</span>`;
+     S.focus=['pHS','pPlan']; } },
+
+ { title:'选择传输路径', code:'mooncake/conn.py:2141  elif is_dcp_transfer', dur:9000,
+   cap:'需要重排时，传输线程走 <code>send_kvcache_dcp</code>，并且把<em>整个请求的</em> D 侧下标传进去，而不是当前块的切片。',
+   act(){ fillP(); S.dRule=true; allocD(); S.hs.map=true; S.hs.cpOnly=true; S.pUnused=[false,false,true,true]; S.arrows=links();
+     check(true, 'KV pool 是 MLA'); check(true, 'target_cp_ranks = [0]'); check(true, 'requires_dcp_relayout = True');
+     S.plan=`<span class="c"># transfer_worker 的分支</span>
+<span class="on">if   is_dcp_transfer:     send_kvcache_dcp</span>  <span class="y">← 本例</span>
+elif is_mla or 同 TP:     send_kvcache
+elif staging:             _do_staging_transfer
+else:                     send_kvcache_slice
+
+<span class="c"># mooncake/conn.py:2102</span>
+chunked_dst_kv_indice = req.dst_kv_indices  <span class="c"># 不切片</span>`;
+     S.focus=['pPlan']; } },
+
+ { title:'传输计划：D1 拿哪些 token', code:'common/utils.py:182  build_dcp_token_transfer_plan', dur:11000,
+   cap:'对 D1：从偏移 <em>(1 − 0) % 4 = 1</em> 开始，每隔 4 个取一个，得到 t1、t5，写到 D1 的第 1、2 行。',
+   act(){ fillP(); S.dRule=true; allocD(); S.pUnused=[false,false,true,true]; S.hs.map=true; S.hs.cpOnly=true;
+     check(true, 'KV pool 是 MLA'); check(true, 'target_cp_ranks = [0]'); check(true, 'requires_dcp_relayout = True');
+     const p = fullPlan(1);
+     S.hl = [...p.src.map(s=>`p0-s${s}`), ...p.dst.map(d=>`d1-s${d}`)]; S.hlCards=['pc0','dc1'];
+     S.plan=`<span class="c"># rank=1, decode_prefix_len=0, src_page_offset=0</span>
+chunk_start    = 0
+target_offsets = range((1 - 0) % 4, 8, 4) = <span class="y">[${p.offs}]</span>  → t1, t5
+target_local   = (0 + offsets) // 4      = [${p.local}]
+
+src 行 = P 的 slot[offsets]  = <span class="y">[${p.src}]</span>
+dst 行 = 虚拟页[local]        = <span class="g">[${p.dst}]</span>`;
+     S.focus=['pPlan','pP','pD']; } },
+
+ { title:'打包：先拼成连续的', code:'common/dcp_pack.py:98  iter_pack_dcp_segments', dur:10500,
+   cap:'t1、t5 在 P0 上是 slot 1 和 3，<em>不连续</em>。先用 GPU kernel 拷进一块连续的 pack buffer，再整块发出去。',
+   act(){ fillP(); S.dRule=true; allocD(); S.pUnused=[false,false,true,true]; S.hs.map=true; S.hs.cpOnly=true;
+     check(true, 'KV pool 是 MLA'); check(true, 'target_cp_ranks = [0]'); check(true, 'requires_dcp_relayout = True');
+     const p = fullPlan(1);
+     S.hl = p.src.map(s=>`p0-s${s}`); S.hlCards=['pc0'];
+     S.plan=`<span class="c"># D1 每隔 dcp 个取一个，源行是跳着的</span>
+P0 上的行：[${p.src}]  <span class="r">不连续</span>
+
+<span class="c"># copy_mla_rows_into_pack：按行 gather 到 pack buffer</span>
+pack buffer：<span class="pack"><i style="--c:${OC[1]}">t1</i><i style="--c:${OC[1]}">t5</i></span>   行 [0, 1]
+<span class="c"># 每层每个 entry 一段，buffer 放不下时按段循环</span>`;
+     S.focus=['pPlan','pP']; } },
+
+ { title:'合并连续区间', code:'common/utils.py:141  group_concurrent_contiguous', dur:10000,
+   cap:'打包后源是 [0,1]、目的是 [1,2]，<em>两边都连续</em>，合成一块：每层只发 <em>1 次 2304 B</em>，而不是 2 次 1152 B。',
+   act(){ fillP(); S.dRule=true; allocD(); S.pUnused=[false,false,true,true]; S.hs.map=true; S.hs.cpOnly=true;
+     check(true, 'KV pool 是 MLA'); check(true, 'target_cp_ranks = [0]'); check(true, 'requires_dcp_relayout = True');
+     const p = fullPlan(1);
+     S.hl = p.dst.map(d=>`d1-s${d}`); S.hlCards=['dc1'];
+     S.plan=`<span class="c"># 源和目的都 +1 递增的连成一组</span>
+src [0, 1]  dst [${p.dst}]  → <span class="g">1 组</span>
+每层：1 × (2 × 1152 B) = <span class="y">2304 B</span>
+
+<span class="c"># 不打包：src [${p.src}] 不连续 → 2 组</span>
+<span class="c"># 长序列时块数 ≈ token 数 / 4 × 层数，打包后大幅减少</span>
+<span class="c"># D 侧虚拟页不连续时，在页边界断开</span>`;
+     S.focus=['pPlan','pD']; } },
+
+ { title:'发送：4 个 D rank 各拿 2 个', code:'mooncake/conn.py:1101  send_kvcache_dcp', dur:10000,
+   cap:'P0 发给 D0、D1，P1 发给 D2、D3。每张 D 卡收到 <em>pos % 4 == rank</em> 的两个 token，可以开始 decode。',
+   act(){ fillP(); S.dRule=true; allocD(); S.pUnused=[false,false,true,true]; S.hs.map=true; S.hs.cpOnly=true;
+     check(true, 'KV pool 是 MLA'); check(true, 'target_cp_ranks = [0]'); check(true, 'requires_dcp_relayout = True');
+     for(let r=0;r<DCP;r++){ const p=fullPlan(r); recvD(r, p.offs); S.arrows.push(...arrowsFor(r, p.offs)); }
+     S.plan=[0,1,2,3].map(r=>{ const p=fullPlan(r);
+       return `D${r} ← P${pRank(r)}：t${p.offs.join(', t')}   src [${p.src}] → dst [${p.dst}]`; }).join('\n')+`
+
+<span class="c"># 每个 P 卡对 2 个 D rank 各算一份计划</span>`;
+     S.focus=['pP','pD']; } },
+
+ { title:'边界 ①：分块 prefill 的相位', code:'common/utils.py:218  target_offsets', dur:12000,
+   cap:'分两块发：第 2 块从 t5 开始。D1 的起点是 <em>(1 − 5) % 4 = 0</em>，正好是 t5；D0 在这块里<em>什么都不拿</em>。',
+   act(){ fillP(); S.dRule=true; allocD(); S.pUnused=[false,false,true,true]; S.hs.map=true; S.hs.cpOnly=true;
+     check(true, 'KV pool 是 MLA'); check(true, 'target_cp_ranks = [0]'); check(true, 'requires_dcp_relayout = True');
+     const c1 = r => dcpPlan({rank:r, srcPages:PS.slice(0,5), dstPages:VP, pageOffset:0, n:5});
+     const c2 = r => dcpPlan({rank:r, srcPages:PS.slice(5), dstPages:VP, pageOffset:5, n:3});
+     for(let r=0;r<DCP;r++){
+       recvD(r, c1(r).offs.map(o=>o), 'kv');
+       const t2 = c2(r).offs.map(o=>5+o); recvD(r, t2);
+       S.arrows.push(...arrowsFor(r, c1(r).offs, 'dim'), ...arrowsFor(r, t2));
+     }
+     const line = r => { const p=c2(r); return `D${r}：(${r} − 5) % 4 = ${p.phase} → ${p.offs.length?`offset [${p.offs}] = t${p.offs.map(o=>5+o)}，local ${p.local} → 行 ${p.dst}`:'<span class="r">空</span>'}`; };
+     S.plan=`<span class="c"># 块 1：t0..t4（已发，淡色）  块 2：t5..t7，src_page_offset = 5</span>
+chunk_start = 0 + 5 = <span class="y">5</span>
+${[0,1,2,3].map(line).join('\n')}
+
+<span class="c"># local = (5 + offset) // 4 = 1 → 写到第 2 个虚拟页</span>`;
+     S.focus=['pPlan','pD']; } },
+
+ { title:'边界 ②：本地前缀要对齐虚拟页', code:'common/utils.py:196  decode_prefix_len % virtual_page_size', dur:11500,
+   cap:'若 D 本地已命中 t0–t3，<em>只传 t4–t7</em>。命中长度必须是虚拟页 <em>4 token 的整数倍</em>，否则直接报错。',
+   act(){ fillP(); S.dRule=true; S.pUnused=[false,false,true,true]; S.hs.map=true; S.hs.cpOnly=true;
+     check(true, 'KV pool 是 MLA'); check(true, 'target_cp_ranks = [0]'); check(true, 'requires_dcp_relayout = True');
+     for(let r=0;r<DCP;r++){
+       S.d[r][VP[0]] = {t:r, st:'hit'};
+       const p = dcpPlan({rank:r, srcPages:PS.slice(4), dstPages:[VP[1]], prefix:4, n:4});
+       const toks = p.offs.map(o=>4+o); recvD(r, toks); S.arrows.push(...arrowsFor(r, toks));
+     }
+     S.plan=`<span class="c"># D 本地 radix 命中 t0..t3（金框），只为 t4..t7 新分配虚拟页 [2]</span>
+decode_prefix_len = <span class="y">4</span>，virtual_page_size = 1 × 4 = 4
+4 % 4 == 0  <span class="g">✓</span>   chunk_start = 4
+D1：(1 − 4) % 4 = 1 → t5 → 行 2
+
+decode_prefix_len = 3 → 3 % 4 ≠ 0  <span class="r">✗ ValueError</span>
+<span class="c"># 半个虚拟页里，哪个 rank 已有哪些 token 说不清</span>`;
+     S.focus=['pPlan','pD']; } },
+
+ { title:'边界 ③：MTP 草稿 KV 不交错', code:'mooncake/conn.py:1221  Draft KV is replicated', dur:11000,
+   cap:'开 MTP 时还有草稿模型的 KV。它在<em>每个 D rank 上都存完整的 8 个 token</em>，不交错、不打包，按原样连续传过去。',
+   act(){ fillP(); S.dRule=true; allocD(); S.pUnused=[false,false,true,true]; S.hs.map=true; S.hs.cpOnly=true;
+     check(true, 'KV pool 是 MLA'); check(true, 'target_cp_ranks = [0]'); check(true, 'requires_dcp_relayout = True');
+     for(let r=0;r<DCP;r++){ recvD(r, fullPlan(r).offs, 'kv'); }
+     S.dFoot = 'draft 全 8 个';
+     S.plan=`<span class="c"># 草稿 KV：draft_offsets = range(8)，按虚拟页寻址</span>
+dst = 虚拟页[local // 4] × 4 + local % 4
+    = 1×4 + 0..3, 2×4 + 0..3 = loc <span class="y">4..11</span>
+
+<span class="c"># 主模型：每 rank 2 个 token，打包后发</span>
+<span class="c"># 草稿：每 rank 8 个 token，本来就连续，直接发</span>
+<span class="c"># 每 token 字节数两边要一致：common/conn.py:345</span>`;
+     S.focus=['pD','pPlan']; } },
+
+ { title:'不支持的组合', code:'common/conn.py:913  _check_dcp_prefill_cp_compat', dur:11500,
+   cap:'重排假设<em>一个源持有整块 KV</em>。所以 P 开 DSA 按层切分、或打开 all-CP-rank transfer 时，<em>握手阶段就报错</em>。',
+   act(){ fillP(); S.dRule=true; [0,1,2,3].forEach(r=>recvD(r, fullPlan(r).offs, 'kv')); S.pUnused=[false,false,true,true];
+     S.hs.map=false; S.dFoot='';
+     check(true, 'MLA，P cp=2，D dcp=4，只从 CP rank 0 取');
+     check(false, 'D 不是 MLA <code>:904</code>');
+     check(false, 'P 开 --enable-dsa-cache-layer-split（每个 CP rank 只有部分层） <code>:924</code>');
+     check(false, 'all-CP-rank transfer（多个源各发一部分） <code>:930</code>');
+     check(false, 'P.dcp > 1 且与 D.dcp 不同 → Unsupported PD DCP topology <code>:341</code>');
+     S.plan=`<span class="c"># 能走通的前提</span>
+1. D 是 MLA / hybrid-MLA
+2. P 是 dcp=1 的完整 KV（CP 时由 CP rank 0 代表）
+3. 每个 D rank 只连一个源，按 pos % dcp 取自己那份
+
+<span class="c"># 以上任何一条不满足，都在握手时 RuntimeError</span>`;
+     S.focus=['pHS']; } },
+
+ { title:'', code:'', dur:13000,
+   cap:'沿着这 5 个位置打断点，用同一个 bootstrap_room 把 P、D 两边的日志串起来看。',
+   act(){ S.overlay='summary'; } },
+];
+
+/* ---------------- render ---------------- */
+const $ = id => document.getElementById(id);
+
+function cellHTML(id, v){
+  const c = v ? OC[v.t % DCP] : '#64748b';
+  return `<div class="cell${v?' '+v.st:''}${S.hl.includes(id)?' hl':''}" id="${id}" style="--c:${c}">${v?'t'+v.t:''}</div>`;
+}
+function pcardHTML(i){
+  const pc = P_CARDS[i];
+  let g = '<div class="pgrid">';
+  for(let s=0;s<8;s++) g += `<span class="sl">${s}</span>` + cellHTML(`p${i}-s${s}`, S.p[i][s]);
+  g += '</div>';
+  return `<div class="card pcard${S.pUnused[i]?' unused':''}${S.hlCards.includes('pc'+i)?' hl':''}" id="pc${i}">
+    <div class="ctitle">P${i}<span class="bd">CP${pc.cp} · attn r${pc.a}</span></div>${g}</div>`;
+}
+function pcardsHTML(){
+  return `<div class="cplab"><b>CP rank 0</b> · 传输源</div><div class="prow">${pcardHTML(0)}${pcardHTML(1)}</div>
+          <div class="cplab"><b>CP rank 1</b> · 内容同上${S.pUnused[2]?' <span class="tagx">不参与传输</span>':''}</div>
+          <div class="prow">${pcardHTML(2)}${pcardHTML(3)}</div>`;
+}
+function dcardHTML(r){
+  let g = '<div class="dgrid">';
+  for(let s=0;s<4;s++) g += `<span class="sl">${s}</span>` + cellHTML(`d${r}-s${s}`, S.d[r][s]);
+  g += '</div>';
+  const own = `<b style="color:${OC[r]}">t${r}, t${r+4}</b>`;
+  const rule = !S.dRule ? '' : S.dFoot ? `pos%4==${r}：${own} · <span style="color:#c4b5fd">${S.dFoot}</span>` : `存 pos % 4 == ${r}：${own}`;
+  return `<div class="card dcard${S.hlCards.includes('dc'+r)?' hl':''}" id="dc${r}">
+    <div class="ctitle">D${r}<span class="bd">dcp r${r} · attn r${r}</span></div>
+    <div class="drule">${rule}</div>${g}</div>`;
+}
+function hsHTML(){
+  if(!S.hs.map && !S.hs.checks.length) return '<span class="ph">等待请求到达，D 先连上 P……</span>';
+  let h = '';
+  if(S.hs.map){
+    const rows = [0,1,2,3].map(r=>`<div class="maprow"><span class="tag">D${r}</span><span class="ar">→ r // 2 →</span>`+
+      `<span class="tag">P${pRank(r)}</span>${S.hs.cpOnly?`<span class="tag off">P${pRank(r)+2}</span><span class="ar">✗ CP1</span>`:''}</div>`).join('');
+    h += `<div class="cols"><div>${rows}</div>`;
+  } else h += '<div class="cols">';
+  h += `<div class="checks">${S.hs.checks.map(c=>`<span class="ck ${c.ok?'ok':'no'}">${c.ok?'✓':'✗'}</span><span class="ckt">${c.html}</span>`).join('')}</div></div>`;
+  return h;
+}
+
+/* ---- arrows ---- */
+const stage=$('stage');
+function rel(el){
+  const st=stage.getBoundingClientRect(), r=el.getBoundingClientRect(), k=st.width/1280;
+  return {l:(r.left-st.left)/k, r:(r.right-st.left)/k, t:(r.top-st.top)/k, b:(r.bottom-st.top)/k, cy:((r.top+r.bottom)/2-st.top)/k};
+}
+const markers=new Set();
+function marker(color){
+  const id='m'+color.replace('#','');
+  if(!markers.has(id)){
+    markers.add(id);
+    $('adefs').insertAdjacentHTML('beforeend',
+      `<marker id="${id}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+       <path d="M0,0 L10,5 L0,10 z" fill="${color}"/></marker>`);
+  }
+  return id;
+}
+function drawArrows(){
+  let h='';
+  S.arrows.forEach(a=>{
+    let x1,y1,x2,y2;
+    if(a.kind==='link'){
+      const p=rel($(a.fromCard)), d=rel($(a.toCard));
+      x1=p.r; y1=(p.t+p.b)/2; x2=d.l; y2=(d.t+d.b)/2;
+    } else {
+      const c=rel($(a.fromCard)), f=rel($(a.from)), t=rel($(a.to)), dc=rel($(a.toCard));
+      x1=c.r; y1=f.cy; x2=dc.l; y2=t.cy;
+    }
+    const dx=(x2-x1)*.45;
+    h += `<path d="M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2-2},${y2}" fill="none" stroke="${a.color}" `+
+         `stroke-width="${a.kind==='link'?1.6:2}" class="${a.kind}" marker-end="url(#${marker(a.color)})"/>`;
+  });
+  $('ag').innerHTML=h;
+}
+
+function render(i){
+  const st=steps[i];
+  $('stitle').innerHTML = st.title ? `<span class="no">${String(i).padStart(2,'0')}</span>${st.title}` : '';
+  $('code').textContent = st.code;
+  $('cap').innerHTML = `<span>${st.cap}</span>`;
+  $('pcards').innerHTML = pcardsHTML();
+  $('dcards').innerHTML = [0,1,2,3].map(dcardHTML).join('');
+  $('hs').innerHTML = hsHTML();
+  const p=$('plan'); p.innerHTML = S.plan || '<span class="ph">开始传输后，这里显示每个 D rank 的计划。</span>';
+  p.style.animation='none'; void p.offsetWidth; p.style.animation='';
+  ['pP','pD','pHS','pPlan'].forEach(id=>$(id).classList.toggle('focus', S.focus.includes(id)));
+  drawArrows();
+
+  const ov=$('ov');
+  if(S.overlay==='title'){
+    ov.innerHTML = `<h1>CP/DCP 下的 PD 传输</h1><h2>SGLang KV Cache 系列 07 · Prefill cp=2 → Decode dcp=4 · 约 3 分钟</h2>`+
+      (started ? '' : `<button class="big" onclick="play()">▶ 开始演示</button>`);
+    ov.classList.remove('hide');
+  } else if(S.overlay==='summary'){
+    ov.innerHTML = `<h1 style="font-size:40px">一句话记住</h1>
+      <div class="sum">P 侧 <b>CP rank 0 代表完整 KV</b>，D 侧 <b>按 pos % dcp 交错</b><br>
+      每个 D rank 从对应的 P 卡<b>每隔 dcp 个取一个</b>，打包成连续块再发<br>
+      分块要接上<b>相位</b>，本地前缀要对齐<b>虚拟页</b>，草稿 KV <b>不交错</b></div>
+      <div class="path">1. common/conn.py:913    _check_dcp_prefill_cp_compat  拓扑能不能走
+2. common/conn.py:938    _resolve_rank_mapping         连哪张 P 卡
+3. common/conn.py:325    requires_dcp_relayout         要不要重排
+4. common/utils.py:182   build_dcp_token_transfer_plan 拿哪些 token
+5. mooncake/conn.py:1101 send_kvcache_dcp              打包并发送</div>`;
+    ov.classList.remove('hide');
+  } else ov.classList.add('hide');
+}
+
+/* ---------------- playback ---------------- */
+let cur=0, playing=false, started=false, timer=null, voice=false;
+const bar=$('bar');
+steps.forEach((s,k)=>{ const d=document.createElement('div'); d.title=s.title||(k?'总结':'概览'); d.onclick=()=>{goto(k); if(playing) schedule();}; bar.appendChild(d); });
+const total = steps.reduce((a,s)=>a+s.dur,0);
+
+function goto(i){
+  cur=Math.max(0,Math.min(steps.length-1,i));
+  init();
+  for(let k=0;k<=cur;k++){ clearTransient(); S.hs.checks=[]; S.overlay=null; steps[k].act(); }
+  render(cur); updateBar(); speak();
+}
+function updateBar(){
+  [...bar.children].forEach((d,k)=>{
+    d.className = k<cur?'done':(k===cur?'cur':''); d.style.setProperty('--d', steps[k].dur+'ms');
+    if(k===cur && !playing) d.classList.add('paused');
+  });
+  const el = steps.slice(0,cur).reduce((a,s)=>a+s.dur,0)/1000;
+  $('time').textContent = `${fmt(el)} / ${fmt(total/1000)}`;
+  $('bplay').textContent = playing ? '⏸' : '▶';
+}
+function fmt(s){ s=Math.round(s); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+function schedule(){ clearTimeout(timer); timer=setTimeout(advance, steps[cur].dur); }
+function advance(){
+  // 开着朗读时，等这句读完再进入下一步
+  if(voice && speechSynthesis.speaking){ timer=setTimeout(advance, 300); return; }
+  if(cur>=steps.length-1){ playing=false; updateBar(); return; }
+  goto(cur+1); schedule();
+}
+function play(){ started=true; if(cur===steps.length-1) goto(0);
+  if(cur===0) goto(1); playing=true; updateBar(); schedule(); }
+function pause(){ playing=false; clearTimeout(timer); speechSynthesis.cancel(); updateBar(); }
+function toggle(){ playing?pause():play(); }
+
+function speak(){
+  if(!voice || !('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const txt = steps[cur].cap.replace(/<[^>]+>/g,'').replace(/&[a-z]+;/g,'').replace(/_/g,' ').replace(/\/\//g,'整除').replace(/−/g,'减');
+  const u = new SpeechSynthesisUtterance(txt); u.lang='zh-CN'; u.rate=1.08;
+  const zh = speechSynthesis.getVoices().find(v=>/zh[-_]CN/i.test(v.lang)); if(zh) u.voice=zh;
+  speechSynthesis.speak(u);
+}
+
+$('bplay').onclick=toggle;
+$('bprev').onclick=()=>{ goto(cur-1); if(playing) schedule(); };
+$('bnext').onclick=()=>{ started=true; goto(cur+1); if(playing) schedule(); };
+$('bvoice').onclick=()=>{ voice=!voice; $('bvoice').textContent = voice?'🔊 朗读':'🔇 朗读'; if(voice) speak(); else speechSynthesis.cancel(); };
+document.addEventListener('keydown',e=>{
+  if(e.code==='Space'){ e.preventDefault(); toggle(); }
+  else if(e.code==='ArrowRight') $('bnext').onclick();
+  else if(e.code==='ArrowLeft') $('bprev').onclick();
+});
+
+function fit(){ const s=Math.min(innerWidth/1300, innerHeight/800); $('wrap').style.transform=`translate(-50%,-50%) scale(${s})`; drawArrows(); }
+addEventListener('resize', fit);
+goto(0); fit();
+</script>
+</body>
+</html>

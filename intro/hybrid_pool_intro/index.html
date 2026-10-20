@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>混合模型的两套池 · SGLang KV Cache 系列 10</title>
+<style>
+  :root{--bg:#0b1020;--panel:#121a2e;--line:#26314d;--text:#e6ebf5;--dim:#8a96b3;
+        --A:#4f8cff;--B:#22c55e;--C:#f59e0b;--gold:#facc15;--red:#ef4444;--pur:#a78bfa}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#05070f;color:var(--text);
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;overflow:hidden}
+  code,.mono{font-family:Menlo,Consolas,monospace}
+  #wrap{position:absolute;left:50%;top:50%;width:1280px;height:780px;transform-origin:center center}
+  #stage{position:relative;width:1280px;height:720px;background:var(--bg);border-radius:14px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+  #top{position:absolute;left:24px;right:24px;top:16px;height:44px;display:flex;align-items:center;justify-content:space-between}
+  #stitle{font-size:24px;font-weight:700;letter-spacing:.5px}
+  #stitle .no{color:var(--dim);font-weight:500;margin-right:10px;font-size:18px}
+  #stitle .part{font-size:13px;font-weight:500;color:#c4b5fd;border:1px solid #5b4a9e;border-radius:6px;padding:2px 8px;margin-left:12px;vertical-align:middle}
+  #code{font-family:Menlo,Consolas,monospace;font-size:14px;color:#c7d2fe;background:#1e2a4a;border:1px solid #334373;padding:6px 12px;border-radius:8px}
+  #code:empty{opacity:0}
+  /* request strip */
+  #req{position:absolute;left:24px;right:24px;top:70px;height:74px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 16px;transition:box-shadow .3s,border-color .3s}
+  .plabel{font-size:13px;color:var(--dim);margin-bottom:7px;display:flex;justify-content:space-between}
+  .plabel b{color:var(--text);font-weight:600}
+  .plabel .m{color:var(--gold)}
+  #chips{display:flex;gap:4px;flex-wrap:nowrap;align-items:center}
+  .chip{font-family:Menlo,monospace;font-size:12.5px;padding:5px 7px;border-radius:7px;border:1.5px solid var(--line);background:#0f1628;transition:all .4s;animation:pop .35s ease-out}
+  .chip.miss{border-color:#64748b;color:#cbd5e1}
+  .chip.hit{border-color:var(--gold);color:var(--gold);background:rgba(250,204,21,.12)}
+  .chip.lost{border-color:var(--red);color:#fca5a5;background:rgba(239,68,68,.1)}
+  .chip.done{border-color:var(--c);background:color-mix(in srgb,var(--c) 22%,transparent);color:#fff}
+  .chip.swaoff{border-style:dashed;border-color:var(--c);color:var(--dim);background:transparent}
+  .win{font-size:11px;color:var(--dim);margin:0 4px}
+  .segbar{display:flex;gap:2px;height:30px;width:100%}
+  .seg{display:flex;align-items:center;justify-content:center;border-radius:6px;font-size:12px;white-space:nowrap;overflow:hidden;border:1.5px solid var(--c);background:color-mix(in srgb,var(--c) 18%,transparent);animation:pop .35s ease-out}
+  .seg.ck{border-color:var(--gold);color:var(--gold);background:rgba(250,204,21,.12)}
+  .seg.hit{border-color:var(--gold);color:var(--gold);background:rgba(250,204,21,.16)}
+  .seg.lost{border-color:var(--red);color:#fca5a5;background:rgba(239,68,68,.1)}
+  .seg.miss{border-color:#64748b;color:#cbd5e1;background:#0f1628}
+  .seg.tree{border-color:var(--gold);background:color-mix(in srgb,var(--c) 30%,transparent)}
+  .seg.freeing{border-color:var(--red);color:#fca5a5;background:rgba(239,68,68,.1);animation:blink .6s ease-in-out infinite alternate}
+  .seg.shared{border-color:var(--gold);color:#fde68a;background:rgba(250,204,21,.1)}
+  @keyframes pop{from{transform:scale(.6);opacity:0}to{transform:scale(1);opacity:1}}
+  /* panels */
+  .panel{position:absolute;top:154px;height:440px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;transition:box-shadow .3s,border-color .3s}
+  .panel h3{margin:0 0 2px;font-size:16px}
+  .panel .sub{font-size:12px;color:var(--dim);margin-bottom:8px}
+  .focus{border-color:#7aa2ff!important;box-shadow:0 0 0 2px rgba(122,162,255,.35),0 0 28px rgba(122,162,255,.25)}
+  #ptree{left:24px;width:388px}
+  #ppool{left:424px;width:426px}
+  #pcalc{left:862px;width:394px}
+  /* tree */
+  #tree{display:flex;justify-content:center;padding-top:4px}
+  .tnode{display:flex;flex-direction:column;align-items:center}
+  .node{background:#0f1628;border:1.5px solid #3b4a6e;border-radius:9px;padding:6px 10px;transition:all .4s;text-align:center;min-width:150px}
+  .node.tomb{border-style:dashed;border-color:#64748b;background:#0c1120}
+  .node.fresh{animation:pop .5s ease-out}
+  .node.hit{border-color:var(--gold);box-shadow:0 0 16px rgba(250,204,21,.35)}
+  .node.split{border-color:var(--pur);box-shadow:0 0 16px rgba(167,139,250,.4)}
+  .node.evict{border-color:var(--red);animation:blink .6s ease-in-out infinite alternate}
+  .ntitle{font-size:13px;color:var(--dim);padding:2px 10px}
+  .nrange{font-family:Menlo,monospace;font-size:13px;font-weight:700}
+  .nmeta{font-family:Menlo,monospace;font-size:10.5px;color:var(--dim);margin-top:3px;line-height:1.45}
+  .bd{display:inline-block;font-size:10.5px;padding:1px 6px;border-radius:5px;margin-left:6px;font-family:Menlo,monospace;vertical-align:1px}
+  .bd.live{background:rgba(34,197,94,.18);color:#86efac;border:1px solid #22c55e}
+  .bd.tomb{background:#1e2536;color:#94a3b8;border:1px dashed #64748b}
+  .bd.mv{background:rgba(250,204,21,.14);color:var(--gold);border:1px solid var(--gold)}
+  .bd.nomv{background:#1e2536;color:#94a3b8;border:1px dashed #64748b}
+  .kids{display:flex;justify-content:center;position:relative;padding-top:12px}
+  .kids::before{content:'';position:absolute;top:0;left:50%;height:12px;border-left:2px solid #475569}
+  .kid{position:relative;padding:12px 4px 0}
+  .kid::before,.kid::after{content:'';position:absolute;top:0;width:50%;height:12px;border-top:2px solid #475569}
+  .kid::before{right:50%}
+  .kid::after{left:50%;border-left:2px solid #475569}
+  .kid:only-child::before{display:none}
+  .kid:only-child::after{border-top:none}
+  .kid:first-child::before{border-top:none}
+  .kid:last-child::after{border-top:none;border-left:none}
+  .kid:last-child::before{border-right:2px solid #475569}
+  .kid:only-child::after{border-left:2px solid #475569}
+  #legend{position:absolute;left:14px;right:14px;bottom:10px;font-size:11.5px;color:var(--dim);line-height:1.6}
+  /* pools */
+  .plab2{font-size:12.5px;color:#cbd5e1;margin:6px 0 4px;display:flex;justify-content:space-between}
+  .plab2 span{color:var(--dim);font-size:11.5px}
+  .grid{display:grid;grid-template-columns:repeat(8,1fr);gap:4px}
+  .slot{height:36px;border-radius:6px;border:1.5px solid #2c3858;background:#0c1222;position:relative;transition:all .45s}
+  .slot .i{position:absolute;left:4px;top:2px;font-family:Menlo,monospace;font-size:9.5px;color:var(--dim)}
+  .slot .t{position:absolute;left:0;right:0;bottom:3px;text-align:center;font-family:Menlo,monospace;font-size:10.5px}
+  .slot.rsv{opacity:.35;border-style:dashed}
+  .slot.pad{visibility:hidden}
+  .slot.alloc{border:2px dashed var(--c);background:color-mix(in srgb,var(--c) 10%,transparent)}
+  .slot.kv{border:2px solid var(--c);background:color-mix(in srgb,var(--c) 45%,transparent)}
+  .slot.tree{border:2px solid var(--gold);background:color-mix(in srgb,var(--c) 45%,transparent)}
+  .slot.new{box-shadow:0 0 14px rgba(167,139,250,.7);border-color:var(--pur)}
+  .slot.freeing{border:2px solid var(--red);animation:blink .6s ease-in-out infinite alternate}
+  @keyframes blink{from{box-shadow:0 0 0 rgba(239,68,68,0)}to{box-shadow:0 0 18px rgba(239,68,68,.7)}}
+  #mapbox{margin-top:8px;font-family:Menlo,monospace;font-size:11px;color:var(--dim);line-height:1.7}
+  #mapbox .mp{display:inline-block;padding:0 5px;margin:0 3px 3px 0;border-radius:4px;border:1px solid #33416a;background:#18223d;color:#c7d2fe;animation:pop .35s ease-out}
+  #mapbox .mp.hl{border-color:var(--pur);color:#ddd6fe;box-shadow:0 0 10px rgba(167,139,250,.5)}
+  #outloc{margin-top:6px;font-family:Menlo,monospace;font-size:11.5px;color:#c7d2fe;min-height:16px}
+  .kvrow{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  .kvrow .rl{width:26px;font-size:12px;font-weight:700;flex:none}
+  .kvrow .rb{flex:1}
+  .kvrow .segbar{height:24px}
+  .kvrow .seg{font-size:11px}
+  .mgrid{display:grid;grid-template-columns:repeat(9,1fr);gap:4px;margin-top:4px}
+  .ms{height:62px;border-radius:7px;border:1.5px solid #2c3858;background:#0c1222;position:relative;transition:all .45s;font-size:11px;text-align:center}
+  .ms .i{position:absolute;left:4px;top:2px;font-family:Menlo,monospace;font-size:9.5px;color:var(--dim)}
+  .ms .o{position:absolute;left:0;right:0;top:18px;font-weight:700;font-size:13px}
+  .ms .r{position:absolute;left:0;right:0;bottom:4px;font-size:10px;color:#dbe4ff;line-height:1.2}
+  .ms.rsv{opacity:.35;border-style:dashed}
+  .ms.live{border:2px solid var(--c);background:color-mix(in srgb,var(--c) 45%,transparent)}
+  .ms.track{border:2px dashed var(--c);background:color-mix(in srgb,var(--c) 14%,transparent)}
+  .ms.ck{border:2px solid var(--gold);background:color-mix(in srgb,var(--c) 30%,transparent)}
+  .ms.tree{border:2px solid var(--gold);background:rgba(250,204,21,.16)}
+  .ms.new{box-shadow:0 0 14px rgba(167,139,250,.7)}
+  .ms.freeing{border:2px solid var(--red);animation:blink .6s ease-in-out infinite alternate}
+  #mnote{margin-top:8px;font-size:12px;color:var(--dim);line-height:1.6}
+  #mnote b{color:var(--text)}
+  /* calc */
+  #calc{margin-top:4px;font-family:Menlo,Consolas,monospace;font-size:12px;line-height:1.62;white-space:pre;color:#dbe4ff;animation:fadein .45s ease-out}
+  #calc .c{color:var(--dim)}
+  #calc .y{color:var(--gold)}
+  #calc .g{color:#86efac}
+  #calc .r{color:#fca5a5}
+  #calc .p{color:#c4b5fd}
+  /* caption */
+  #cap{position:absolute;left:24px;right:24px;top:604px;height:102px;display:flex;align-items:center;justify-content:center;text-align:center;font-size:20px;line-height:1.55;padding:0 30px;
+    background:linear-gradient(180deg,rgba(18,26,46,.9),rgba(18,26,46,.6));border:1px solid var(--line);border-radius:12px}
+  #cap span{animation:fadein .5s ease-out}
+  #cap em{font-style:normal;color:var(--gold)}
+  #cap code{font-size:17px;color:#c7d2fe}
+  @keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  /* overlay */
+  #ov{position:absolute;inset:0;background:radial-gradient(ellipse at center,#16224a 0%,#0b1020 70%);display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .6s;z-index:10}
+  #ov.hide{opacity:0;pointer-events:none}
+  #ov h1{font-size:50px;margin:0 0 14px;letter-spacing:2px}
+  #ov h2{font-size:22px;font-weight:400;color:var(--dim);margin:0 0 34px}
+  #ov .big{font-size:18px;padding:12px 30px;border-radius:30px;background:#4f8cff;color:#fff;border:none;cursor:pointer}
+  #ov .sum{font-size:19px;line-height:1.85;text-align:left}
+  #ov .sum b{color:var(--gold)}
+  #ov .path{margin-top:22px;font-family:Menlo,monospace;font-size:14.5px;color:#c7d2fe;background:#121a2e;border:1px solid var(--line);padding:14px 22px;border-radius:10px;line-height:1.9;white-space:pre}
+  /* controls */
+  #ctrl{position:absolute;left:0;right:0;top:732px;height:44px;display:flex;align-items:center;gap:12px;padding:0 6px}
+  #ctrl button{background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;min-width:40px;font-size:15px;cursor:pointer;padding:0 10px}
+  #ctrl button:hover{background:#26325a}
+  #ctrl a.home{display:flex;align-items:center;background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;padding:0 10px;font-size:13px;text-decoration:none;white-space:nowrap}
+  #ctrl a.home:hover{background:#26325a}
+  #bar{flex:1;display:flex;gap:3px;height:10px;cursor:pointer}
+  #bar div{flex:1;background:#232d4b;border-radius:3px;position:relative;overflow:hidden}
+  #bar div.done{background:#4f8cff}
+  #bar div.cur::after{content:'';position:absolute;left:0;top:0;bottom:0;background:#4f8cff;animation:fill var(--d) linear forwards}
+  #bar div.cur.paused::after{animation-play-state:paused}
+  @keyframes fill{from{width:0}to{width:100%}}
+  #time{font-size:13px;color:var(--dim);width:64px;text-align:right}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <div id="top"><div id="stitle"></div><div id="code"></div></div>
+
+    <div id="req">
+      <div class="plabel"><span><b>当前请求</b>&nbsp; <span id="reqname"></span></span><span id="match" class="m"></span></div>
+      <div id="chips"></div>
+    </div>
+
+    <div class="panel" id="ptree">
+      <h3 id="treeh"></h3><div class="sub" id="trees"></div>
+      <div id="tree"></div>
+      <div id="legend"></div>
+    </div>
+
+    <div class="panel" id="ppool">
+      <h3 id="poolh"></h3><div class="sub" id="pools"></div>
+      <div id="poolbody"></div>
+    </div>
+
+    <div class="panel" id="pcalc">
+      <h3>③ 计算</h3><div class="sub" id="calcs"></div>
+      <div id="calc"></div>
+    </div>
+
+    <div id="cap"></div>
+    <div id="ov"></div>
+  </div>
+
+  <div id="ctrl">
+    <a class="home" href="../index.html" title="返回目录">☰ 目录</a>
+    <button id="bprev" title="上一步 (←)">⏮</button>
+    <button id="bplay" title="自动演示/暂停 (空格)">▶</button>
+    <button id="bnext" title="下一步 (→)">⏭</button>
+    <div id="bar"></div>
+    <div id="time"></div>
+    <button id="bvoice" title="中文语音朗读">🔇 朗读</button>
+  </div>
+</div>
+
+<script>
+const COLORS = {A:'#4f8cff', B:'#22c55e', C:'#f59e0b', D:'#4f8cff', E:'#22c55e', F:'#f59e0b', T:'#facc15'};
+const WIN = 4;                       // sliding_window_size（例）
+const NFULL = 16, NSWA = 13, NM = 9; // 含 slot 0：full size 15，SWA size 12，Mamba size 8
+
+let S;
+function init(){
+  S = {
+    part:1, req:null, match:'',
+    tree:{id:'root', children:[]},
+    full:Array.from({length:NFULL}, ()=>({t:null, st:'free', o:null})),
+    swa: Array.from({length:NSWA},  ()=>({t:null, st:'free', o:null})),
+    map:{}, outLoc:'', kv:[],
+    ms:Array.from({length:NM}, ()=>({st:'free', o:null, r:''})),
+    overlay:null,
+  };
+  clearTransient();
+}
+function clearTransient(){
+  S.focus=[]; S.calc=''; S.fmark={}; S.smark={}; S.mmark={}; S.maphl=null;
+  walk(S.tree, n=>{ n.fresh=false; n.hit=false; n.split=false; n.evict=false; });
+}
+function walk(n,f){ f(n); (n.children||[]).forEach(c=>walk(c,f)); }
+const range = (a,b)=>Array.from({length:b-a}, (_,i)=>a+i);
+const ch = (t,cls,o)=>({t,cls,o});
+const toks = (a,b,cls,o)=>range(a,b).map(i=>ch('t'+i,cls,o));
+function setM(i, st, o, r){ S.ms[i] = {st, o, r}; S.mmark[i]='new'; }
+function freeM(i){ S.ms[i] = {st:'free', o:null, r:''}; S.mmark[i]='freeing'; }
+
+const steps = [
+ { title:'', code:'', dur:5000,
+   cap:'一个模型里有<em>滑动窗口</em>层或<em>线性注意力</em>层时，各层存的东西不同，于是要两套池。',
+   act(){ S.overlay='title'; } },
+
+ /* ================= Part 1：SWA ================= */
+ { title:'SWA 模型：两个 KV 池', code:'mem_cache/swa_memory_pool.py:21  SWAKVPool', dur:8000,
+   cap:'full 层和 SWA 层的 KV 放在<em>两个池</em>里。一个 token 两边各占一个 slot，<em>编号可以不同</em>，靠映射表对上。',
+   act(){ S.calc=`<span class="c"># SWAKVPool 组合两个池</span>
+full_kv_pool   size 15  ← full 层
+swa_kv_pool    size 12  ← SWA 层
+layers_mapping[layer_id]
+  = (池内层号, is_swa_layer)
+<span class="c"># 同一 token 在两池的 slot 号不同</span>
+full_to_swa_index_mapping[full] = <span class="y">swa</span>
+<span class="c"># 例：window = ${WIN}，page_size = 1</span>`;
+     S.focus=['ppool','pcalc']; } },
+
+ { title:'池大小：SWA 池按比例缩小', code:'model_executor/pool_configurator.py:773  _solve_pool_sizes', dur:9000,
+   cap:'先按显存解出 full 池大小，SWA 池再乘 <em>swa_full_tokens_ratio</em>（默认 0.8）：SWA 只存窗口内的 token。',
+   act(){ S.calc=`<span class="c"># _solve_pool_sizes（hybrid 分支）</span>
+full_tokens = align(max_total) = <span class="y">15</span>
+swa_tokens  = align(15 × 0.8)  = <span class="y">12</span>
+<span class="c"># --swa-full-tokens-ratio，未设取 0.8</span>
+
+<span class="c"># 每个 full token 要付的字节：</span>
+cell = F × n_full + <span class="y">r</span> × S × n_swa
+<span class="c"># F/S：单层每 token 字节，r：比例</span>`;
+     S.focus=['pcalc','ppool']; } },
+
+ { title:'请求 A：两个池同时分配', code:'mem_cache/allocator/swa.py:219  alloc', dur:9000,
+   cap:'A 有 10 个 token：<em>两个池各拿 10 个 slot</em> 并记下映射，返回的 <code>out_cache_loc</code> <em>只有 full 编号</em>。',
+   act(){ S.req={name:'A', chips:toks(0,10,'miss','A')}; S.match='命中 0 / 10';
+     range(0,10).forEach(i=>{ S.full[i+1]={t:i,st:'alloc',o:'A'}; S.swa[i+1]={t:i,st:'alloc',o:'A'}; S.map[i+1]=i+1; S.fmark[i+1]='new'; S.smark[i+1]='new'; });
+     S.outLoc='out_cache_loc = [1..10]   <span style="color:#8a96b3">（full 编号）</span>';
+     S.calc=`<span class="c"># alloc(10)：两个分配器各拿 10 个</span>
+full_attn_allocator.alloc(10) → <span class="y">1..10</span>
+swa_attn_allocator.alloc(10)  → <span class="y">1..10</span>
+set_full_to_swa_mapping(full, swa)
+return <span class="y">full</span>   <span class="c"># 调度器只见 full 号</span>
+<span class="c"># 任一池不够都返回 None</span>`;
+     S.focus=['req','ppool']; } },
+
+ { title:'写 KV：SWA 层先翻译', code:'mem_cache/swa_memory_pool.py:237  translate_loc_from_full_to_swa', dur:8000,
+   cap:'写 KV 时 full 层直接用 <code>out_cache_loc</code>，SWA 层先<em>查映射表</em>翻译成 SWA 编号再写。',
+   act(){ range(1,11).forEach(i=>{ S.full[i].st='kv'; S.swa[i].st='kv'; }); S.req.chips.forEach(c=>c.cls='done');
+     S.outLoc='out_cache_loc = [1..10] → swa_loc = [1..10]';
+     S.calc=`set_kv_buffer(layer, loc_info, k, v)
+  full 层 → full_kv_pool[<span class="y">loc</span>]
+  SWA 层  → swa_kv_pool[<span class="y">swa_loc</span>]
+
+swa_loc = full_to_swa_index_mapping[loc]
+<span class="c"># attention backend 每次 forward 翻译一次</span>
+<span class="c"># 现在两边编号恰好相同，后面会错开</span>`;
+     S.focus=['ppool','pcalc']; } },
+
+ { title:'窗口滑出：只释放 SWA', code:'managers/schedule_batch.py:3744  maybe_evict_swa', dur:12000,
+   cap:'decode 到 seqlen 13，滑出窗口的 t0..t7 <em>只释放 SWA slot</em>，full KV 不动。空出的 SWA slot 1 给了 t12。',
+   act(){ S.req.chips.push(...toks(10,13,'done','A'));
+     S.req.chips.forEach((c,i)=>{ if(i<8) c.cls='swaoff'; });
+     [11,12,13].forEach((f,k)=>{ S.full[f]={t:10+k,st:'kv',o:'A'}; S.fmark[f]='new'; });
+     range(1,9).forEach(s=>{ S.swa[s]={t:null,st:'free',o:null}; S.smark[s]='freeing'; delete S.map[s]; });
+     S.swa[11]={t:10,st:'kv',o:'A'}; S.swa[12]={t:11,st:'kv',o:'A'}; S.swa[1]={t:12,st:'kv',o:'A'};
+     S.smark[11]='new'; S.smark[12]='new'; S.smark[1]='new';
+     S.map[11]=11; S.map[12]=12; S.map[13]=1; S.maphl=13;
+     S.match='swa_evicted_seqlen = 8';
+     S.outLoc='最近一步：out_cache_loc = [13] → swa_loc = [1]';
+     S.calc=`<span class="c"># 触发（例中 interval = 1）</span>
+seqlen−1−window ≥ evicted + interval
+<span class="c"># free_swa_out_of_window_slots</span>
+thr = pre_len − max(window, page)
+seqlen 12：11 − 4 = 7 → 放 t0..t6
+seqlen 13：12 − 4 = <span class="y">8</span> → 放 t7
+<span class="r">只调 free_swa_segment，full 不动</span>
+<span class="c"># 默认 SGLANG_SWA_EVICTION_INTERVAL=128</span>`;
+     S.focus=['ppool','req']; } },
+
+ { title:'A 结束：前半段是 tombstone', code:'mem_cache/swa_radix_cache.py:1286  _insert_helper', dur:11000,
+   cap:'A 结束进树：[0,8) 只剩 full KV，记成 <em>tombstone</em>；[8,13) 两个池都在，是<em>活叶子</em>。',
+   act(){ S.req.name='A（已结束）'; S.match='';
+     const n2={id:'n2', r:'[8,13)', o:'A', full:'9–13', swa:'9,10,11,12,1', children:[], fresh:true};
+     S.tree.children=[{id:'n1', r:'[0,8)', o:'A', tomb:true, full:'1–8', swa:'—', children:[n2], fresh:true}];
+     range(1,14).forEach(i=>S.full[i].st='tree'); [9,10,11,12,1].forEach(s=>S.swa[s].st='tree');
+     S.calc=`cache_finished_req → insert(
+    key 13, swa_evicted_seqlen = <span class="y">8</span>)
+0 &lt; 8 &lt; 13 → 拆成两个节点：
+  [0,8)  <span class="p">swa_tombstone = True</span>
+         只有 full KV（slot 1..8）
+  [8,13) 活叶子：full + SWA 都在
+<span class="c"># 不变式：叶子节点不能是 tombstone</span>`;
+     S.focus=['ptree']; } },
+
+ { title:'请求 B：窗口内都在才算命中', code:'mem_cache/swa_radix_cache.py:914  _match_prefix_helper', dur:11000,
+   cap:'B 与 A 的 13 个 token 相同。最后一个 tombstone 之后有 <em>5 个活 token ≥ 窗口 4</em>，<em>命中 13</em>。',
+   act(){ S.req={name:'B', chips:[...toks(0,13,'hit','B'), ch('Q2','miss','B')]}; S.match='命中 13 / 14';
+     S.tree.children[0].hit=true; S.tree.children[0].children[0].hit=true;
+     S.calc=`<span class="c"># 记录最后一个 tombstone 之后的长度</span>
+root → [0,8) tombstone：
+  之前 ∞ ≥ 4 → best = 0，计数清零
+→ [8,13) 活：计数 = <span class="y">5</span>
+结束：5 ≥ window 4 → best = <span class="y">13</span>
+<span class="g">full 用 0..12，SWA 只读最后 4 个</span>`;
+     S.focus=['req','ptree']; } },
+
+ { title:'请求 C：full 有 10 个，也只命中 0', code:'mem_cache/swa_radix_cache.py:914  _match_prefix_helper', dur:12000,
+   cap:'C 只和 A 前 10 个相同：tombstone 后只有 <em>2 个活 token &lt; 4</em>。full KV 有 10 个，却<em>命中 0</em>。',
+   act(){ S.req={name:'C', chips:[...toks(0,10,'lost','C'), ch('Q3','miss','C')]}; S.match='相同 10 → 命中 0';
+     const n1=S.tree.children[0];
+     const tail={id:'n3', r:'[10,13)', o:'A', full:'11–13', swa:'11,12,1', children:[]};
+     n1.children=[{id:'n2', r:'[8,10)', o:'A', full:'9–10', swa:'9,10', children:[tail], split:true}];
+     S.calc=`[0,8) tombstone → best = 0，计数 0
+[8,13) 在 10 处拆开 → [8,10) 活
+计数 = <span class="y">2</span> &lt; 4 → best 仍是 <span class="y">0</span>
+<span class="r">full KV 有 10 个，也只能命中 0</span>
+<span class="c"># 要么从 root 起没有 tombstone，</span>
+<span class="c"># 要么最后一个 tombstone 后 ≥ window</span>`;
+     S.focus=['req','ptree']; } },
+
+ { title:'淘汰：两个 LRU，两种结果', code:'mem_cache/swa_radix_cache.py:602  evict', dur:10000,
+   cap:'SWA 池紧张时按 SWA LRU 挑<em>内部节点</em>：只放它的 SWA slot、改成 tombstone，<em>full KV 留着</em>。',
+   act(){ const n2=S.tree.children[0].children[0]; n2.tomb=true; n2.swa='—'; n2.evict=true;
+     [9,10].forEach(s=>{ S.swa[s]={t:null,st:'free',o:null}; S.smark[s]='freeing'; delete S.map[s]; });
+     S.req=null; S.match='';
+     S.calc=`evict(num_tokens, swa_num_tokens)
+① full：按 full LRU 删叶子
+   连带删掉变成叶子的 tombstone
+② SWA 还不够：按 SWA LRU 取节点
+   内部节点 → 只放 SWA，<span class="p">标 tombstone</span>
+   叶子     → full + SWA 一起删
+例：[8,10) 有子节点 → <span class="r">放 SWA 9、10</span>
+<span class="c"># [10,13) 只剩 3 个活 token &lt; 4</span>`;
+     S.focus=['ptree','ppool']; } },
+
+ /* ================= Part 2：Mamba / 线性注意力 ================= */
+ { title:'线性注意力：每个请求一个状态槽', code:'mem_cache/memory_pool.py:383  MambaPool', dur:9000,
+   cap:'线性注意力层只存一份<em>固定大小的状态</em>：每个请求<em>一个槽</em>，150 个 token 和 10 万个 token 一样大。',
+   act(){ S.part=2; S.tree={id:'root', children:[]}; S.req=null; S.match=''; S.kv=[];
+     S.calc=`<span class="c"># MambaPool.State（每层一份）</span>
+conv     [层, size+1, conv 窗口]
+temporal [层, size+1, H, K, V]
+<span class="c"># 槽 0 留给 padding（MambaSlotAllocator）</span>
+
+请求 150 token  → <span class="y">1 槽</span>
+请求 100k token → <span class="y">也是 1 槽</span>
+<span class="c"># KV 随长度涨，状态槽不随长度涨</span>
+<span class="c"># 例：chunk = 64，page_size = 1</span>`;
+     S.focus=['ppool','pcalc']; } },
+
+ { title:'请求 D：KV + 一个活槽 + 追踪槽', code:'mem_cache/memory_pool.py:1423  HybridReqToTokenPool.alloc', dur:10000,
+   cap:'D 有 150 个 token：KV 照常按 token 分配；状态池给 <em>1 个活槽</em>，再给 <em>2 个 ping-pong 追踪槽</em>。',
+   act(){ S.req={name:'D', segs:[{n:150, cls:'miss', l:'D 的 prompt：150 token', o:'D'}]}; S.match='命中 0 / 150';
+     S.kv=[{name:'D', segs:[{n:150, cls:'', l:'KV slot 1..150', o:'D'}]}];
+     setM(1,'live','D','活状态'); setM(2,'track','D','追踪'); setM(3,'track','D','追踪');
+     S.calc=`mamba_allocator.alloc(1) → <span class="y">槽 1</span>（活）
+<span class="c"># extra_buffer：ping-pong 追踪槽</span>
+size = 2 if overlap else 1
+_alloc_ping_pong_buffer → <span class="y">槽 2、3</span>
+KV：照常分配 150 个 token slot
+<span class="c"># 槽号存在 req.kv.mamba_pool_idx</span>`;
+     S.focus=['ppool','req']; } },
+
+ { title:'快照只落在块边界', code:'managers/schedule_batch.py:2940  mamba_track_seqlen_aligned', dur:11000,
+   cap:'状态是逐步累加的，只能在<em>块边界</em>留快照。150 向下取整到 64 的倍数是 <em>128</em>，128 处的状态写进追踪槽 2。',
+   act(){ S.req.segs=[{n:128, cls:'ck', l:'0–128：状态快照', o:'D'}, {n:22, cls:'', l:'128–150', o:'D'}];
+     S.ms[2]={st:'ck', o:'D', r:'快照@128'}; S.mmark[2]='new';
+     S.calc=`grid = lcm(chunk 64, page 1) = <span class="y">64</span>
+aligned = len(prefix)
+        + extend // grid × grid
+        = 0 + 150 // 64 × 64 = <span class="y">128</span>
+→ 追踪槽 2 存 128 处的状态
+mamba_last_track_seqlen = 128
+<span class="c"># 150 处的状态只在活槽 1 里</span>`;
+     S.focus=['req','ppool']; } },
+
+ { title:'D 结束：树里只缓存到 128', code:'mem_cache/mamba_radix_cache.py:565  cache_finished_req', dur:11000,
+   cap:'只缓存到<em>最后一个快照</em> 128：节点 [0,128) 拿槽 2 当 <em>mamba_value</em>，128 之后的 KV 直接释放。',
+   act(){ S.req.name='D（已结束）'; S.match='';
+     S.tree.children=[{id:'m1', r:'[0,128)', o:'D', kv:'1–128', mv:'槽 2', children:[], fresh:true}];
+     S.kv=[{name:'D', segs:[{n:128, cls:'tree', l:'KV 1..128 进树', o:'D'}, {n:25, cls:'freeing', l:'释放', o:'D'}]}];
+     S.ms[2]={st:'tree', o:'T', r:'树 [0,128)'}; S.mmark[2]='new'; freeM(1); freeM(3);
+     S.calc=`cache_len = mamba_last_track_seqlen
+          = <span class="y">128</span>
+KV[128:] → free（没有对应的状态）
+insert([0,128), mamba_value = <span class="y">槽 2</span>)
+free_mamba_cache：<span class="r">放槽 1、3</span>，留槽 2
+<span class="c"># 槽 2 从此归树，不归请求</span>`;
+     S.focus=['ptree','ppool']; } },
+
+ { title:'请求 E：命中 128，COW 一份状态', code:'mem_cache/mamba_radix_cache.py:1210  _match_post_processor', dur:11000,
+   cap:'E 与 D 前 140 个相同，命中 <em>128</em>。树里的槽 2 不能改，先<em>拷进新槽 4</em>（COW），从 128 接着算。',
+   act(){ S.req={name:'E', segs:[{n:128, cls:'hit', l:'命中 128', o:'E'}, {n:32, cls:'miss', l:'新算 32', o:'E'}]}; S.match='相同 140 → 命中 128';
+     S.tree.children[0].hit=true;
+     S.kv.push({name:'E', segs:[{n:128, cls:'shared', l:'共享 KV 1..128', o:'E'}, {n:32, cls:'', l:'新 32', o:'E'}]});
+     setM(4,'live','E','活 ← 槽 2'); setM(5,'track','E','追踪'); setM(6,'track','E','追踪');
+     S.calc=`<span class="c"># _match_prefix_helper</span>
+best = 最深的带 mamba_value 的节点
+     = [0,128) → 命中 <span class="y">128</span>
+<span class="c"># COW（推迟到 forward stream）</span>
+dst = mamba_allocator.alloc(1) = <span class="y">槽 4</span>
+mamba_cow_src_index = <span class="y">槽 2</span>
+E 从 128 起 prefill 32 个 token
+<span class="c"># 32 &lt; 64，这次不留新快照</span>`;
+     S.focus=['req','ptree','ppool']; } },
+
+ { title:'请求 F：拆开的节点没有状态', code:'mem_cache/mamba_radix_cache.py:1227  _split_node', dur:12000,
+   cap:'F 只和 D 前 100 个相同：节点拆开了，<em>状态拆不开</em>，前半段没有 mamba_value，<em>命中 0</em>。',
+   act(){ S.req={name:'F', segs:[{n:100, cls:'lost', l:'相同 100：有 KV，无状态', o:'F'}, {n:20, cls:'miss', l:'新 20', o:'F'}]}; S.match='相同 100 → 命中 0';
+     const m1=S.tree.children[0];
+     S.tree.children=[{id:'m0', r:'[0,100)', o:'D', kv:'1–100', mv:null, split:true,
+       children:[{id:'m1', r:'[100,128)', o:'D', kv:'101–128', mv:'槽 2', children:[]}]}];
+     S.kv.push({name:'F', segs:[{n:120, cls:'', l:'新 120', o:'F'}]});
+     setM(7,'live','F','活状态'); setM(8,'track','F','追踪'); setM(1,'track','F','追踪');
+     S.calc=`_split_node：[0,128) 在 100 拆开
+  [0,100)   <span class="p">mamba_value = None</span>
+  [100,128) mamba_value = 槽 2
+最深带状态的节点 = root → 命中 <span class="y">0</span>
+<span class="r">KV 有 100 个，状态没有 → 全部重算</span>
+branching = 100 // 64 × 64 = <span class="y">64</span>
+<span class="c"># F prefill 时多在 64 处留一个快照</span>`;
+     S.focus=['req','ptree']; } },
+
+ { title:'预算切分与并发上限', code:'mem_cache/kv_cache_configurator.py:2599  _handle_max_mamba_cache', dur:12000,
+   cap:'剩余显存按 <em>--mamba-full-memory-ratio</em>（默认 0.9）切给两池；槽数除以<em>每请求槽数</em>即并发上限。',
+   act(){ S.calc=`<span class="c"># 例：权重之后剩 rest = 40 GB</span>
+state = 40 × 0.9 / 1.9 = <span class="y">18.95 GB</span>
+KV    = 40 − 18.95     = <span class="y">21.05 GB</span>
+每槽 54 MB → max_mamba_cache_size
+  = (18.95 GB − 54 MB) // 54 MB = <span class="y">358</span>
+每请求槽数 = 3 + 2(ping-pong) = <span class="y">5</span>
+并发 ≤ 358 // 5 = <span class="y">71</span>
+<span class="c"># resolve_max_num_reqs (:2398) 截断</span>
+<span class="c"># 本例 3 个请求已占 8 个槽</span>`;
+     S.focus=['pcalc','ppool']; } },
+
+ { title:'对应到 GLM-5.3-Flash', code:'models/glm5_next.py:582  is_kda_layer', dur:11000,
+   cap:'GLM-5.3-Flash（glm5_next）：<em>KDA 线性层</em>用状态池，<em>MLA 层</em>用 KV 池，走的正是第二部分这套。',
+   act(){ S.calc=`is_kda_layer(i)：i ∈ kda_layers
+<span class="c"># 未给 layer_types 时的默认划分：</span>
+  i % 4 != 3 → <span class="y">KDA</span>（线性注意力）
+  i % 4 == 3 → <span class="y">MLA</span>（DSA）
+45 层 → <span class="y">34 层 KDA + 11 层 MLA</span>
+KDA → MambaPool 状态槽
+MLA → 按 token 的 KV pool
+<span class="c"># mambaish_config ← glm5_next_config</span>`;
+     S.focus=['pcalc','ptree','ppool']; } },
+
+ { title:'', code:'', dur:13000,
+   cap:'用 window 4、chunk 64 的小例子，在这 5 处打断点，看 tombstone 和 mamba_value 怎么变。',
+   act(){ S.overlay='summary'; } },
+];
+
+/* ---------------- render ---------------- */
+const $ = id => document.getElementById(id);
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function nodeHTML(n){
+  if(n.id==='root') return `<div class="tnode"><div class="node" style="min-width:0"><div class="ntitle">root</div></div>${n.children.length?kidsHTML(n.children):''}</div>`;
+  const cls = 'node'+(n.tomb?' tomb':'')+(n.fresh?' fresh':'')+(n.hit?' hit':'')+(n.split?' split':'')+(n.evict?' evict':'');
+  let badge, meta;
+  if(S.part===1){
+    badge = n.tomb ? '<span class="bd tomb">tombstone</span>' : '<span class="bd live">活</span>';
+    meta = `full ${n.full}<br>SWA ${n.swa}`;
+  } else {
+    badge = n.mv ? `<span class="bd mv">mamba_value ${n.mv}</span>` : '<span class="bd nomv">mamba_value None</span>';
+    meta = `KV ${n.kv}`;
+  }
+  return `<div class="tnode"><div class="${cls}"><div><span class="nrange" style="color:${COLORS[n.o]}">${n.r}</span>${badge}</div>
+    <div class="nmeta">${meta}</div></div>${n.children.length?kidsHTML(n.children):''}</div>`;
+}
+function kidsHTML(cs){ return `<div class="kids">${cs.map(c=>`<div class="kid">${nodeHTML(c)}</div>`).join('')}</div>`; }
+
+function slotHTML(s, i, mark){
+  if(i===0) return `<div class="slot rsv"><span class="i">0</span><span class="t">保留</span></div>`;
+  const st = s.st!=='free' ? ' '+s.st : '';
+  const mk = mark[i] ? ' '+mark[i] : '';
+  return `<div class="slot${st}${mk}" style="--c:${COLORS[s.o]||'#2c3858'}"><span class="i">${i}</span><span class="t">${s.t===null?'':'t'+s.t}</span></div>`;
+}
+function poolHTML(){
+  if(S.part===1){
+    let full='', swa='';
+    S.full.forEach((s,i)=>full+=slotHTML(s,i,S.fmark));
+    S.swa.forEach((s,i)=>swa+=slotHTML(s,i,S.smark));
+    for(let k=NSWA;k<16;k++) swa+='<div class="slot pad"></div>';
+    const keys = Object.keys(S.map).map(Number).sort((a,b)=>a-b);
+    const mp = keys.length ? keys.map(f=>`<span class="mp${S.maphl===f?' hl':''}">${f}→${S.map[f]}</span>`).join('') : '（空）';
+    return `<div class="plab2">Full KV pool<span>size 15 · full 层读这里</span></div><div class="grid">${full}</div>
+      <div class="plab2" style="margin-top:10px">SWA pool<span>size 12 = 15 × 0.8 · SWA 层读这里</span></div><div class="grid">${swa}</div>
+      <div id="mapbox">full_to_swa_index_mapping：<br>${mp}</div>
+      <div id="outloc">${S.outLoc}</div>`;
+  }
+  const scale = 160;
+  const rows = S.kv.length ? S.kv.map(r=>{
+    const tot = r.segs.reduce((a,s)=>a+s.n,0);
+    const segs = r.segs.map(s=>`<div class="seg ${s.cls}" style="flex:${s.n};--c:${COLORS[s.o]}">${esc(s.l)}</div>`).join('');
+    return `<div class="kvrow"><span class="rl" style="color:${COLORS[r.name]}">${r.name}</span><div class="rb"><div class="segbar" style="width:${Math.min(100,tot/scale*100)}%">${segs}</div></div></div>`;
+  }).join('') : '<div style="font-size:12px;color:#8a96b3;font-style:italic;margin-bottom:6px">（没有请求）</div>';
+  const ms = S.ms.map((m,i)=>{
+    if(i===0) return `<div class="ms rsv"><span class="i">0</span><span class="o"></span><span class="r">padding</span></div>`;
+    const mk = S.mmark[i] ? ' '+S.mmark[i] : '';
+    const st = m.st!=='free' ? ' '+m.st : '';
+    return `<div class="ms${st}${mk}" style="--c:${COLORS[m.o]||'#2c3858'}"><span class="i">${i}</span><span class="o" style="color:${m.o==='T'?'#facc15':'#fff'}">${m.o==='T'?'树':(m.o||'')}</span><span class="r">${esc(m.r)}</span></div>`;
+  }).join('');
+  const used = S.ms.filter((m,i)=>i>0 && m.st!=='free').length;
+  return `<div class="plab2">KV pool（attention 层，按 token）<span>横向长度 ∝ token 数</span></div>${rows}
+    <div class="plab2" style="margin-top:12px">Mamba state pool（线性层，按请求）<span>size 8</span></div><div class="mgrid">${ms}</div>
+    <div id="mnote">已用 <b>${used}</b> / 8 槽 · 实线 = 活状态 · 虚线 = 追踪槽 · 金色 = 快照 / 树持有</div>`;
+}
+
+function chipsHTML(){
+  if(!S.req) return '';
+  if(S.req.segs){
+    return `<div class="segbar" style="width:${S.req.segs.reduce((a,s)=>a+s.n,0)/160*100}%">${S.req.segs.map(s=>`<div class="seg ${s.cls}" style="flex:${s.n};--c:${COLORS[s.o]}">${esc(s.l)}</div>`).join('')}</div>`;
+  }
+  return S.req.chips.map(c=>`<span class="chip ${c.cls}" style="--c:${COLORS[c.o]}">${esc(c.t)}</span>`).join('');
+}
+
+function render(i){
+  const st=steps[i];
+  const partTag = st.title ? `<span class="part">${S.part===1?'第一部分 · SWA':'第二部分 · 线性注意力'}</span>` : '';
+  $('stitle').innerHTML = st.title ? `<span class="no">${String(i).padStart(2,'0')}</span>${st.title}${partTag}` : '';
+  $('code').textContent = st.code;
+  $('cap').innerHTML = `<span>${st.cap}</span>`;
+  $('reqname').textContent = S.req ? '请求 '+S.req.name : '（空）';
+  $('chips').innerHTML = chipsHTML();
+  $('match').textContent = S.match;
+  if(S.part===1){
+    $('treeh').textContent='① SWARadixCache'; $('trees').textContent='节点 = 一段 token；tombstone = 只剩 full KV';
+    $('legend').innerHTML='金色 = 命中 · 紫色 = 拆分 · 红色 = 正在淘汰<br>虚线框 tombstone：full KV 在，SWA KV 已放';
+    $('poolh').textContent='② Full KV pool + SWA pool'; $('pools').textContent='一个 token 在两个池各占一格，靠映射表对应';
+    $('calcs').textContent='window = 4 · page_size = 1';
+  } else {
+    $('treeh').textContent='① MambaRadixCache'; $('trees').textContent='节点存 KV；只有部分节点带 mamba_value（状态槽）';
+    $('legend').innerHTML='金色徽标 = 该节点末尾有状态快照<br>命中只能停在<b style="color:#e6ebf5">最深的带 mamba_value 的节点</b>';
+    $('poolh').textContent='② KV pool + Mamba state pool'; $('pools').textContent='KV 按 token 分配；状态按请求分配，与长度无关';
+    $('calcs').textContent='chunk = 64 · page_size = 1 · extra_buffer';
+  }
+  $('tree').innerHTML = nodeHTML(S.tree);
+  $('poolbody').innerHTML = poolHTML();
+  const c=$('calc'); c.innerHTML = S.calc; c.style.animation='none'; void c.offsetWidth; c.style.animation='';
+  ['req','ptree','ppool','pcalc'].forEach(id=>$(id).classList.toggle('focus', S.focus.includes(id)));
+
+  const ov=$('ov');
+  if(S.overlay==='title'){
+    ov.innerHTML = `<h1>混合模型的两套池</h1><h2>SGLang KV Cache 系列 10 · SWA 滑窗 + 线性注意力状态 · 约 3 分钟</h2>`+
+      (started ? '' : `<button class="big" onclick="play()">▶ 开始演示</button>`);
+    ov.classList.remove('hide');
+  } else if(S.overlay==='summary'){
+    ov.innerHTML = `<h1 style="font-size:40px">一句话记住</h1>
+      <div class="sum">SWA：一个 token 在 <b>full 池和 SWA 池各占一格</b>，窗口外<b>只放 SWA</b>，树里留 <b>tombstone</b><br>
+      线性注意力：每个请求<b>一个固定大小的状态槽</b>，只在<b>块边界</b>留快照<br>
+      前缀命中要<b>两样都在</b>：SWA 看窗口内的 KV，线性层看最深的 <b>mamba_value</b>（命中后 COW）</div>
+      <div class="path">1. mem_cache/allocator/swa.py:219            alloc                      两池同时分配
+2. managers/schedule_batch.py:3722           maybe_evict_swa            何时只放 SWA
+3. mem_cache/swa_radix_cache.py:914          _match_prefix_helper       tombstone 与窗口
+4. managers/schedule_batch.py:2940           mamba_track_seqlen_aligned 快照落在哪
+5. mem_cache/mamba_radix_cache.py:1156       _match_post_processor      命中与 COW</div>`;
+    ov.classList.remove('hide');
+  } else ov.classList.add('hide');
+}
+
+/* ---------------- playback ---------------- */
+let cur=0, playing=false, started=false, timer=null, voice=false;
+const bar=$('bar');
+steps.forEach((s,k)=>{ const d=document.createElement('div'); d.title=s.title||(k?'总结':'概览'); d.onclick=()=>{goto(k); if(playing) schedule();}; bar.appendChild(d); });
+const total = steps.reduce((a,s)=>a+s.dur,0);
+function goto(i){
+  cur=Math.max(0,Math.min(steps.length-1,i));
+  init();
+  for(let k=0;k<=cur;k++){ clearTransient(); S.overlay=null; steps[k].act(); }
+  render(cur); updateBar(); speak();
+}
+function updateBar(){
+  [...bar.children].forEach((d,k)=>{ d.className = k<cur?'done':(k===cur?'cur':''); d.style.setProperty('--d', steps[k].dur+'ms'); if(k===cur && !playing) d.classList.add('paused'); });
+  const el = steps.slice(0,cur).reduce((a,s)=>a+s.dur,0)/1000;
+  $('time').textContent = `${fmt(el)} / ${fmt(total/1000)}`;
+  $('bplay').textContent = playing ? '⏸' : '▶';
+}
+function fmt(s){ s=Math.round(s); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+function schedule(){ clearTimeout(timer); timer=setTimeout(advance, steps[cur].dur); }
+function advance(){
+  // 开着朗读时，等这句读完再进入下一步
+  if(voice && speechSynthesis.speaking){ timer=setTimeout(advance, 300); return; }
+  if(cur>=steps.length-1){ playing=false; updateBar(); return; }
+  goto(cur+1); schedule();
+}
+function play(){ started=true; if(cur===steps.length-1) goto(0); if(cur===0) goto(1); playing=true; updateBar(); schedule(); }
+function pause(){ playing=false; clearTimeout(timer); speechSynthesis.cancel(); updateBar(); }
+function toggle(){ playing?pause():play(); }
+function speak(){
+  if(!voice || !('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const txt = steps[cur].cap.replace(/<[^>]+>/g,'').replace(/&lt;/g,'小于').replace(/&[a-z]+;/g,'').replace(/_/g,' ').replace(/−/g,'减').replace(/≥/g,'大于等于');
+  const u = new SpeechSynthesisUtterance(txt); u.lang='zh-CN'; u.rate=1.08;
+  const zh = speechSynthesis.getVoices().find(v=>/zh[-_]CN/i.test(v.lang)); if(zh) u.voice=zh;
+  speechSynthesis.speak(u);
+}
+$('bplay').onclick=toggle;
+$('bprev').onclick=()=>{ goto(cur-1); if(playing) schedule(); };
+$('bnext').onclick=()=>{ started=true; goto(cur+1); if(playing) schedule(); };
+$('bvoice').onclick=()=>{ voice=!voice; $('bvoice').textContent = voice?'🔊 朗读':'🔇 朗读'; if(voice) speak(); else speechSynthesis.cancel(); };
+document.addEventListener('keydown',e=>{
+  if(e.code==='Space'){ e.preventDefault(); toggle(); }
+  else if(e.code==='ArrowRight') $('bnext').onclick();
+  else if(e.code==='ArrowLeft') $('bprev').onclick();
+});
+function fit(){ const s=Math.min(innerWidth/1300, innerHeight/800); $('wrap').style.transform=`translate(-50%,-50%) scale(${s})`; }
+addEventListener('resize', fit); fit();
+goto(0);
+</script>
+</body>
+</html>

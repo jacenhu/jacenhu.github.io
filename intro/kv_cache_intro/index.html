@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>一个请求的 KV Cache 之旅 · SGLang KV Cache 系列 01</title>
+<style>
+  :root{--bg:#0b1020;--panel:#121a2e;--line:#26314d;--text:#e6ebf5;--dim:#8a96b3;
+        --A:#4f8cff;--B:#22c55e;--C:#f59e0b;--gold:#facc15;--red:#ef4444}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#05070f;color:var(--text);
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;overflow:hidden}
+  #wrap{position:absolute;left:50%;top:50%;width:1280px;height:780px;transform-origin:center center}
+  #stage{position:relative;width:1280px;height:720px;background:var(--bg);border-radius:14px;overflow:hidden;
+    box-shadow:0 20px 60px rgba(0,0,0,.6)}
+  /* top bar */
+  #top{position:absolute;left:24px;right:24px;top:16px;height:44px;display:flex;align-items:center;justify-content:space-between}
+  #stitle{font-size:24px;font-weight:700;letter-spacing:.5px}
+  #stitle .no{color:var(--dim);font-weight:500;margin-right:10px;font-size:18px}
+  #code{font-family:Menlo,Consolas,monospace;font-size:14px;color:#c7d2fe;background:#1e2a4a;border:1px solid #334373;
+    padding:6px 12px;border-radius:8px;transition:opacity .3s}
+  #code:empty{opacity:0}
+  /* request strip */
+  #req{position:absolute;left:24px;right:24px;top:70px;height:80px;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;padding:10px 16px;transition:box-shadow .3s,border-color .3s}
+  .plabel{font-size:13px;color:var(--dim);margin-bottom:8px;display:flex;justify-content:space-between}
+  .plabel b{color:var(--text);font-weight:600}
+  #chips{display:flex;gap:6px;flex-wrap:nowrap}
+  .chip{font-family:Menlo,Consolas,monospace;font-size:13px;padding:6px 9px;border-radius:7px;border:1.5px solid var(--line);
+    background:#0f1628;transition:all .4s;animation:pop .35s ease-out}
+  .chip.pending{color:var(--dim)}
+  .chip.miss{border-color:#64748b;color:#cbd5e1}
+  .chip.hit{border-color:var(--gold);color:var(--gold);background:rgba(250,204,21,.12)}
+  .chip.done{border-color:var(--c);background:color-mix(in srgb,var(--c) 22%,transparent);color:#fff}
+  .chip.out{border-style:dashed;border-color:var(--c);color:var(--c)}
+  .chip.small{font-size:11px;padding:5px 6px}
+  @keyframes pop{from{transform:scale(.6);opacity:0}to{transform:scale(1);opacity:1}}
+  /* panels */
+  .panel{position:absolute;top:162px;height:432px;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:12px 14px;transition:box-shadow .3s,border-color .3s}
+  .panel h3,#req h3{margin:0 0 2px;font-size:16px}
+  .panel .sub{font-size:12px;color:var(--dim);margin-bottom:10px}
+  .focus{border-color:#7aa2ff!important;box-shadow:0 0 0 2px rgba(122,162,255,.35),0 0 28px rgba(122,162,255,.25)}
+  .pulse{animation:pulse 1.4s ease-in-out both}
+  @keyframes pulse{0%,100%{box-shadow:none}40%{box-shadow:0 0 0 3px rgba(250,204,21,.6),0 0 30px rgba(250,204,21,.35);border-color:var(--gold)}}
+  #ptree{left:24px;width:384px}
+  #prow{left:420px;width:440px}
+  #pkv{left:872px;width:384px}
+  /* tree */
+  #tree{display:flex;justify-content:center;padding-top:6px}
+  .tnode{display:flex;flex-direction:column;align-items:center}
+  .node{background:#0f1628;border:1.5px solid #3b4a6e;border-radius:9px;padding:6px 8px;max-width:300px;
+    transition:all .4s;text-align:center}
+  .node.fresh{animation:pop .5s ease-out}
+  .node.hit{border-color:var(--gold);box-shadow:0 0 18px rgba(250,204,21,.35)}
+  .node.evicting{border-color:var(--red);animation:blink .7s ease-in-out infinite alternate}
+  @keyframes blink{from{box-shadow:0 0 0 rgba(239,68,68,0)}to{box-shadow:0 0 22px rgba(239,68,68,.7)}}
+  .ntitle{font-size:13px;color:var(--dim);padding:2px 10px}
+  .ntoks{display:flex;flex-wrap:wrap;gap:3px;justify-content:center}
+  .tk{font-family:Menlo,monospace;font-size:11px;padding:2px 5px;border-radius:4px;
+    background:color-mix(in srgb,var(--c) 30%,transparent);border:1px solid var(--c)}
+  .nmeta{font-family:Menlo,monospace;font-size:10.5px;color:var(--dim);margin-top:3px}
+  .nmeta .lock{color:var(--gold)}
+  .kids{display:flex;justify-content:center;position:relative;padding-top:14px}
+  .kids::before{content:'';position:absolute;top:0;left:50%;height:14px;border-left:2px solid #475569}
+  .kid{position:relative;padding:14px 5px 0}
+  .kid::before,.kid::after{content:'';position:absolute;top:0;width:50%;height:14px;border-top:2px solid #475569}
+  .kid::before{right:50%}
+  .kid::after{left:50%;border-left:2px solid #475569}
+  .kid:only-child::before{display:none}
+  .kid:only-child::after{border-top:none}
+  .kid:first-child::before{border-top:none}
+  .kid:last-child::after{border-top:none;border-left:none}
+  .kid:last-child::before{border-right:2px solid #475569}
+  .kid:only-child::after{border-left:2px solid #475569}
+  /* req_to_token */
+  .row{display:flex;align-items:center;gap:8px;margin-bottom:10px;transition:opacity .5s;animation:pop .4s ease-out}
+  .row.released{opacity:.25}
+  .rlab{width:92px;flex:none;font-size:12px;line-height:1.3}
+  .rlab .idx{font-family:Menlo,monospace;color:var(--dim)}
+  .cells{display:flex;flex-wrap:wrap;gap:3px}
+  .cell{width:19px;height:24px;border-radius:4px;font-family:Menlo,monospace;font-size:10.5px;display:flex;
+    align-items:center;justify-content:center;background:color-mix(in srgb,var(--c) 35%,transparent);border:1px solid var(--c);
+    animation:pop .35s ease-out}
+  .cell.shared{border:1.5px dashed var(--gold)}
+  .rowempty{font-size:12px;color:var(--dim);font-style:italic}
+  #rowhint{font-size:12px;color:var(--dim);margin-top:14px;line-height:1.6}
+  #rowhint code{font-family:Menlo,monospace;color:#c7d2fe}
+  /* kv grid */
+  #grid{display:grid;grid-template-columns:repeat(6,54px);gap:6px;justify-content:center}
+  .slot{height:54px;border-radius:8px;border:1.5px solid #2c3858;background:#0c1222;position:relative;transition:all .45s}
+  .slot .i{position:absolute;left:5px;top:3px;font-family:Menlo,monospace;font-size:10px;color:var(--dim)}
+  .slot .t{position:absolute;left:0;right:0;bottom:5px;text-align:center;font-family:Menlo,monospace;font-size:10.5px}
+  .slot.alloc{border:2px dashed var(--c);background:color-mix(in srgb,var(--c) 10%,transparent)}
+  .slot.kv{border:2px solid var(--c);background:color-mix(in srgb,var(--c) 45%,transparent)}
+  .slot.tree{border:2px solid var(--gold);background:color-mix(in srgb,var(--c) 45%,transparent)}
+  .slot.tree::after{content:'🌲';position:absolute;right:3px;top:1px;font-size:10px}
+  .slot.evict{border:2px solid var(--red);background:rgba(239,68,68,.35);animation:blink .6s ease-in-out infinite alternate}
+  #freebox{margin-top:12px;text-align:center;font-size:14px}
+  #freebox b{font-size:18px}
+  #freebox.need b{color:var(--red)}
+  #need{color:var(--red);font-size:13px;margin-top:4px;min-height:18px}
+  #outloc{margin-top:8px;text-align:center;font-family:Menlo,monospace;font-size:12.5px;color:#c7d2fe;min-height:18px}
+  #legend{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:10px;font-size:11px;color:var(--dim)}
+  #legend span{display:flex;align-items:center;gap:4px}
+  #legend i{width:12px;height:12px;border-radius:3px;display:inline-block}
+  /* caption */
+  #cap{position:absolute;left:24px;right:24px;top:606px;height:100px;display:flex;align-items:center;justify-content:center;
+    text-align:center;font-size:20px;line-height:1.55;padding:0 30px;background:linear-gradient(180deg,rgba(18,26,46,.9),rgba(18,26,46,.6));
+    border:1px solid var(--line);border-radius:12px}
+  #cap span{animation:fadein .5s ease-out}
+  #cap em{font-style:normal;color:var(--gold)}
+  #cap code{font-family:Menlo,monospace;font-size:17px;color:#c7d2fe}
+  @keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  /* overlay */
+  #ov{position:absolute;inset:0;background:radial-gradient(ellipse at center,#16224a 0%,#0b1020 70%);display:flex;flex-direction:column;
+    align-items:center;justify-content:center;transition:opacity .6s;z-index:10}
+  #ov.hide{opacity:0;pointer-events:none}
+  #ov h1{font-size:52px;margin:0 0 14px;letter-spacing:2px}
+  #ov h2{font-size:22px;font-weight:400;color:var(--dim);margin:0 0 34px}
+  #ov .big{font-size:18px;padding:12px 30px;border-radius:30px;background:#4f8cff;color:#fff;border:none;cursor:pointer}
+  #ov .sum{font-size:20px;line-height:2;text-align:left}
+  #ov .sum b{color:var(--gold)}
+  #ov .path{margin-top:22px;font-family:Menlo,monospace;font-size:15px;color:#c7d2fe;background:#121a2e;border:1px solid var(--line);
+    padding:14px 22px;border-radius:10px;line-height:1.9}
+  /* controls */
+  #ctrl{position:absolute;left:0;right:0;top:732px;height:44px;display:flex;align-items:center;gap:12px;padding:0 6px}
+  #ctrl button{background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;min-width:40px;
+    font-size:15px;cursor:pointer;padding:0 10px}
+  #ctrl button:hover{background:#26325a}
+  #ctrl a.home{display:flex;align-items:center;background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;padding:0 10px;font-size:13px;text-decoration:none;white-space:nowrap}
+  #ctrl a.home:hover{background:#26325a}
+  #bar{flex:1;display:flex;gap:3px;height:10px;cursor:pointer}
+  #bar div{flex:1;background:#232d4b;border-radius:3px;position:relative;overflow:hidden}
+  #bar div.done{background:#4f8cff}
+  #bar div.cur::after{content:'';position:absolute;left:0;top:0;bottom:0;background:#4f8cff;animation:fill var(--d) linear forwards}
+  #bar div.cur.paused::after{animation-play-state:paused}
+  @keyframes fill{from{width:0}to{width:100%}}
+  #time{font-size:13px;color:var(--dim);width:64px;text-align:right}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <div id="top"><div id="stitle"></div><div id="code"></div></div>
+
+    <div id="req">
+      <div class="plabel"><span><b>当前请求</b>&nbsp; <span id="reqname"></span></span><span id="match"></span></div>
+      <div id="chips"></div>
+    </div>
+
+    <div class="panel" id="ptree">
+      <h3>① RadixCache</h3><div class="sub">决定「留什么」：token 前缀 → 节点（持有 slot）</div>
+      <div id="tree"></div>
+    </div>
+
+    <div class="panel" id="prow">
+      <h3>② ReqToTokenPool</h3><div class="sub">每个请求一行：第 i 个 token → slot 下标</div>
+      <div id="rows"></div>
+      <div id="rowhint">
+        <code>req_to_token[req_pool_idx][i] = slot</code><br>
+        attention kernel 通过这张「页表」找到每个请求的历史 KV。<br>
+        <span style="color:var(--gold)">虚线金框</span> = 复用自 Radix Tree 的共享前缀
+      </div>
+    </div>
+
+    <div class="panel" id="pkv">
+      <h3>③ Allocator + ④ KV Pool</h3><div class="sub">Allocator 管「哪里空」，KV Pool 按 slot 存 K/V 张量</div>
+      <div id="grid"></div>
+      <div id="outloc"></div>
+      <div id="freebox">空闲 slot：<b id="freen">24</b> / 24</div>
+      <div id="need"></div>
+      <div id="legend">
+        <span><i style="border:2px dashed #94a3b8"></i>已分配</span>
+        <span><i style="background:#4f8cff"></i>A 的 KV</span>
+        <span><i style="background:#22c55e"></i>B 的 KV</span>
+        <span><i style="background:#f59e0b"></i>C 的 KV</span>
+        <span><i style="border:2px solid #facc15"></i>归树所有 🌲</span>
+      </div>
+    </div>
+
+    <div id="cap"></div>
+
+    <div id="ov"></div>
+  </div>
+
+  <div id="ctrl">
+    <a class="home" href="../index.html" title="返回目录">☰ 目录</a>
+    <button id="bprev" title="上一步 (←)">⏮</button>
+    <button id="bplay" title="自动演示/暂停 (空格)">▶</button>
+    <button id="bnext" title="下一步 (→)">⏭</button>
+    <div id="bar"></div>
+    <div id="time"></div>
+    <button id="bvoice" title="中文语音朗读">🔇 朗读</button>
+  </div>
+</div>
+
+<script>
+const COLORS = {A:'#4f8cff', B:'#22c55e', C:'#f59e0b'};
+const N_SLOTS = 24;
+const A_PROMPT = ['<sys>','You','are','helpful','Q1'];
+const B_PROMPT = ['<sys>','You','are','helpful','Q2'];
+const C_PROMPT = Array.from({length:18}, (_,i)=>'c'+(i+1));
+
+let S;
+function init(){
+  S = {
+    slots: Array.from({length:N_SLOTS}, ()=>({owner:null, st:'free', tok:''})),
+    // allocator 的空闲列表：顺序故意打乱，说明物理 slot 不必连续
+    free: [3,7,8,12,13,0,1,18,19,20,5,6,9,10,11,14,15,16,17,21,22,23,2,4],
+    rows: [], tree: {id:'root', toks:[], slots:[], lock:0, children:[]},
+    req: null, v: {}, overlay: null,
+  };
+  clearTransient();
+}
+function clearTransient(){
+  S.focus = []; S.outLoc = null; S.match = ''; S.need = '';
+  walk(S.tree, n=>{ n.fresh=false; n.hit=false; });
+}
+function walk(n, f){ f(n); n.children.forEach(c=>walk(c, f)); }
+function alloc(n, owner, toks){
+  const idx = S.free.splice(0, n);
+  idx.forEach((s,i)=>{ S.slots[s] = {owner, st:'alloc', tok:toks[i]}; });
+  return idx;
+}
+function write(idx){ idx.forEach(s=>S.slots[s].st='kv'); }
+function chip(t, cls, owner){ return {t, cls, owner}; }
+
+const steps = [
+ { title:'', code:'', dur:5000,
+   cap:'跟着 3 个请求，看一个 token 的 KV 从<em>分配</em>、<em>缓存</em>、<em>复用</em>到<em>淘汰</em>的全过程。',
+   act(){ S.overlay='title'; } },
+
+ { title:'四个角色', code:'mem_cache/README.md', dur:9000,
+   cap:'<em>RadixCache</em> 决定留什么；<em>ReqToTokenPool</em> 记录请求第 i 个 token 在哪个 slot；<em>Allocator</em> 管哪些 slot 空闲；<em>KV Pool</em> 按 slot 存真正的 K/V。',
+   act(){ S.focus=['roles']; } },
+
+ { title:'请求 A 到达', code:'managers/scheduler.py', dur:5000,
+   cap:'请求 A 带着 5 个 prompt token 进入调度器的等待队列。',
+   act(){ S.req={name:'A', chips:A_PROMPT.map(t=>chip(t,'pending','A'))}; S.focus=['req']; } },
+
+ { title:'match_prefix：查最长公共前缀', code:'radix_cache.py:397  match_prefix', dur:6000,
+   cap:'调度前先在 Radix Tree 里查最长公共前缀。树是空的，<em>命中 0 个</em>，5 个 token 全部要算。',
+   act(){ S.req.chips.forEach(c=>c.cls='miss'); S.match='命中 0 / 5'; S.focus=['ptree','req']; } },
+
+ { title:'alloc_req_slots：领一行页表', code:'allocation.py:289  alloc_req_slots', dur:6000,
+   cap:'在 ReqToTokenPool 里给 A 分配一行（<code>req_pool_idx=0</code>），它每个 token 的 slot 都会记在这一行。',
+   act(){ S.rows.push({idx:0, req:'A', cells:[]}); S.focus=['prow']; } },
+
+ { title:'alloc_for_extend：分配 slot', code:'allocation.py:344  alloc_for_extend', dur:8000,
+   cap:'Allocator 从空闲列表取出 5 个 slot——<em>不一定连续</em>，靠页表做映射。这组下标就是 <code>out_cache_loc</code>。',
+   act(){ const s=alloc(5,'A',A_PROMPT); S.v.A=s; S.rows[0].cells=s.map(x=>({slot:x}));
+          S.outLoc=s; S.focus=['pkv','prow']; } },
+
+ { title:'Prefill：写入 KV', code:'memory_pool.py:1909  set_kv_buffer', dur:8000,
+   cap:'前向时每层 attention 按 <code>out_cache_loc</code> 调用 <code>set_kv_buffer</code> 把 K/V 写进 slot，并采样出第一个输出 token A1。',
+   act(){ write(S.v.A); S.req.chips.forEach(c=>c.cls='done'); S.req.chips.push(chip('A1','out','A'));
+          S.outLoc=S.v.A; S.focus=['pkv']; } },
+
+ { title:'Decode：每步 1 个 slot', code:'allocation.py:587  alloc_for_decode', dur:8500,
+   cap:'Decode 把上一步的输出 A1 当输入：分配 <em>1 个 slot</em>、写入它的 KV，再采样下一个 token。生成 &lt;/s&gt;，请求结束。',
+   act(){ const s=alloc(1,'A',['A1']); write(s); S.v.A.push(...s); S.rows[0].cells.push({slot:s[0]});
+          S.req.chips[5].cls='done'; S.req.chips.push(chip('</s>','out','A'));
+          S.outLoc=s; S.focus=['pkv','prow']; } },
+
+ { title:'cache_finished_req：交给 Radix Tree', code:'radix_cache.py:479  cache_finished_req', dur:9000,
+   cap:'结束后 KV <em>不立即释放</em>：6 个 token 连同 slot 插入 Radix Tree，页表行归还。这些 slot 现在归树所有。',
+   act(){ S.tree.children.push({id:'n1', owner:'A', toks:[...A_PROMPT,'A1'], slots:[...S.v.A], lock:0, access:1, children:[], fresh:true});
+          S.v.A.forEach(s=>S.slots[s].st='tree'); S.rows[0].released=true; S.focus=['ptree']; } },
+
+ { title:'请求 B 到达', code:'', dur:5000,
+   cap:'请求 B 和 A 用<em>同一段系统提示</em>，只是问题不同。',
+   act(){ S.rows=S.rows.filter(r=>!r.released);
+          S.req={name:'B', chips:B_PROMPT.map(t=>chip(t,'pending','B'))}; S.focus=['req']; } },
+
+ { title:'前缀命中 + 节点分裂', code:'radix_cache.py:750  _split_node', dur:9000,
+   cap:'<code>match_prefix</code> 命中前 <em>4 个 token</em>。命中点落在节点中间，节点被分裂成「共享前缀」和「Q1 A1」两段。',
+   act(){ const n1=S.tree.children[0];
+          const shared={id:'sh', owner:'A', toks:n1.toks.slice(0,4), slots:n1.slots.slice(0,4), lock:0, access:2, children:[], hit:true};
+          n1.toks=n1.toks.slice(4); n1.slots=n1.slots.slice(4);
+          shared.children.push(n1); S.tree.children=[shared];
+          S.req.chips.forEach((c,i)=>c.cls=i<4?'hit':'miss'); S.match='命中 4 / 5';
+          S.focus=['ptree','req']; } },
+
+ { title:'复用 slot + 加锁', code:'radix_cache.py:668  inc_lock_ref', dur:9000,
+   cap:'B 的页表行直接填入共享前缀的 4 个 slot，<em>不再重算</em>。<code>inc_lock_ref</code> 给这条路径加锁，B 运行期间不会被淘汰。',
+   act(){ const sh=S.tree.children[0]; sh.lock=1; sh.hit=true;
+          S.rows.push({idx:0, req:'B', cells:sh.slots.map(x=>({slot:x, shared:true}))});
+          S.match='命中 4 / 5'; S.focus=['prow','ptree']; } },
+
+ { title:'只为新 token 分配', code:'allocation.py:344  alloc_for_extend', dur:8500,
+   cap:'这次只为 Q2 分配 <em>1 个</em>新 slot。Prefill 计算量从 5 个 token 降到 1 个——这就是前缀缓存的收益。',
+   act(){ const s=alloc(1,'B',['Q2']); write(s); S.v.B=s; S.rows[0].cells.push({slot:s[0]});
+          S.req.chips.forEach((c,i)=>c.cls=i<4?'hit':'done'); S.req.chips.push(chip('A2','out','B'));
+          S.outLoc=s; S.focus=['pkv','prow']; } },
+
+ { title:'Decode', code:'allocation.py:587  alloc_for_decode', dur:5000,
+   cap:'继续 decode：为 A2 分配 slot 并写入，生成 &lt;/s&gt;。',
+   act(){ const s=alloc(1,'B',['A2']); write(s); S.v.B.push(...s); S.rows[0].cells.push({slot:s[0]});
+          S.req.chips[5].cls='done'; S.req.chips.push(chip('</s>','out','B'));
+          S.outLoc=s; S.focus=['pkv']; } },
+
+ { title:'B 结束：插入 + 解锁', code:'radix_cache.py:479 / 683  dec_lock_ref', dur:8500,
+   cap:'B 的新 token 作为共享前缀的<em>子节点</em>插入，<code>dec_lock_ref</code> 解锁。现在共享前缀被 A、B 两个分支共用。',
+   act(){ const sh=S.tree.children[0]; sh.lock=0;
+          sh.children.push({id:'n2', owner:'B', toks:['Q2','A2'], slots:[...S.v.B], lock:0, access:3, children:[], fresh:true});
+          S.v.B.forEach(s=>S.slots[s].st='tree'); S.rows[0].released=true; S.focus=['ptree']; } },
+
+ { title:'请求 C：显存不够了', code:'allocation.py:151  alloc_token_slots', dur:8000,
+   cap:'请求 C 有 18 个 token，与树里没有公共前缀。它需要 <em>18 个 slot</em>，但空闲只有 16 个。',
+   act(){ S.rows=S.rows.filter(r=>!r.released);
+          S.req={name:'C', chips:C_PROMPT.map(t=>chip(t,'miss','C'))}; S.match='命中 0 / 18';
+          S.need='需要 18，不够 → 向 Radix Tree 申请淘汰'; S.focus=['pkv','req']; } },
+
+ { title:'evict：挑选牺牲者', code:'radix_cache.py:638  evict', dur:9000,
+   cap:'只有 <code>lock_ref=0</code> 的<em>叶子</em>能被淘汰，默认按 LRU 选最久未访问的：「Q1 A1」(t=1) 比「Q2 A2」(t=3) 更旧。',
+   act(){ const n1=S.tree.children[0].children[0]; n1.evicting=true;
+          n1.slots.forEach(s=>S.slots[s].st='evict'); S.need='需要 18，不够 → 向 Radix Tree 申请淘汰';
+          S.focus=['ptree','pkv']; } },
+
+ { title:'evict：slot 归还 Allocator', code:'allocator/token.py:65  free', dur:8500,
+   cap:'叶子被删除，2 个 slot 还给 Allocator，空闲变为 <em>18</em>。共享前缀因为还有子节点，被保留。',
+   act(){ const sh=S.tree.children[0]; const n1=sh.children.shift();
+          n1.slots.forEach(s=>{ S.slots[s]={owner:null, st:'free', tok:''}; }); S.free.push(...n1.slots);
+          S.focus=['pkv','ptree']; } },
+
+ { title:'C 开始运行', code:'allocation.py:344  alloc_for_extend', dur:8000,
+   cap:'C 拿到 18 个 slot 开始 prefill。KV Cache 就在<em>分配 → 缓存 → 复用 → 淘汰</em>之间不断循环。',
+   act(){ S.rows.push({idx:0, req:'C', cells:[]});
+          const s=alloc(18,'C',C_PROMPT); write(s); S.rows[0].cells=s.map(x=>({slot:x}));
+          S.req.chips.forEach(c=>c.cls='done'); S.outLoc=s; S.focus=['pkv','prow']; } },
+
+ { title:'', code:'', dur:12000,
+   cap:'建议阅读顺序：沿一个请求的生命周期读，并在这 5 个函数上打断点，亲手验证。',
+   act(){ S.overlay='summary'; } },
+];
+
+/* ---------------- render ---------------- */
+const $ = id => document.getElementById(id);
+const grid = $('grid');
+const slotEls = Array.from({length:N_SLOTS}, (_,i)=>{
+  const d=document.createElement('div'); d.className='slot';
+  d.innerHTML=`<span class="i">${i}</span><span class="t"></span>`; grid.appendChild(d); return d;
+});
+
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function nodeHTML(n){
+  if(n.id==='root'){
+    const kids = n.children.length ? kidsHTML(n.children) : '';
+    return `<div class="tnode"><div class="node"><div class="ntitle">root</div></div>${kids}</div>`;
+  }
+  const cls = 'node'+(n.fresh?' fresh':'')+(n.hit?' hit':'')+(n.evicting?' evicting':'');
+  const toks = n.toks.map(t=>`<span class="tk" style="--c:${COLORS[n.owner]}">${esc(t)}</span>`).join('');
+  const lock = n.lock ? `<span class="lock">🔒 lock_ref=${n.lock}</span>` : `lock_ref=0`;
+  const body = `<div class="ntoks">${toks}</div><div class="nmeta">slots [${n.slots.join(',')}]</div>`+
+               `<div class="nmeta">${lock} · t=${n.access}</div>`;
+  return `<div class="tnode"><div class="${cls}">${body}</div>${n.children.length?kidsHTML(n.children):''}</div>`;
+}
+function kidsHTML(cs){ return `<div class="kids">${cs.map(c=>`<div class="kid">${nodeHTML(c)}</div>`).join('')}</div>`; }
+
+let lastTreeHTML='', lastRowsHTML='', lastChipsHTML='';
+function render(i){
+  const st = steps[i];
+  // title / code / caption
+  $('stitle').innerHTML = st.title ? `<span class="no">${String(i).padStart(2,'0')}</span>${st.title}` : '';
+  $('code').textContent = st.code;
+  $('cap').innerHTML = `<span>${st.cap}</span>`;
+
+  // request strip
+  if(S.req){
+    $('reqname').textContent = '请求 '+S.req.name;
+    const small = S.req.chips.length>10 ? ' small' : '';
+    const html = S.req.chips.map(c=>`<span class="chip ${c.cls}${small}" style="--c:${COLORS[c.owner]}">${esc(c.t)}</span>`).join('');
+    if(html!==lastChipsHTML){ $('chips').innerHTML=html; lastChipsHTML=html; }
+  } else { $('reqname').textContent='（空）'; $('chips').innerHTML=''; lastChipsHTML=''; }
+  $('match').textContent = S.match;
+
+  // tree
+  const th = nodeHTML(S.tree);
+  if(th!==lastTreeHTML){ $('tree').innerHTML=th; lastTreeHTML=th; }
+
+  // rows
+  const rh = S.rows.length ? S.rows.map(r=>{
+      const cells = r.cells.length ? r.cells.map(c=>`<div class="cell${c.shared?' shared':''}" style="--c:${COLORS[S.slots[c.slot].owner]||'#64748b'}">${c.slot}</div>`).join('')
+                                   : '<span class="rowempty">（空行，等待分配 slot）</span>';
+      return `<div class="row${r.released?' released':''}"><div class="rlab"><span class="idx">idx ${r.idx}</span><br>请求 ${r.req}${r.released?' · 已归还':''}</div><div class="cells">${cells}</div></div>`;
+    }).join('') : '<span class="rowempty">（没有运行中的请求）</span>';
+  if(rh!==lastRowsHTML){ $('rows').innerHTML=rh; lastRowsHTML=rh; }
+
+  // slots
+  S.slots.forEach((s,k)=>{
+    const el=slotEls[k];
+    el.className='slot'+(s.st!=='free'?' '+s.st:'');
+    el.style.setProperty('--c', COLORS[s.owner]||'#2c3858');
+    el.querySelector('.t').textContent = s.tok;
+  });
+  $('outloc').textContent = S.outLoc ? `out_cache_loc = [${S.outLoc.join(', ')}]` : '';
+  $('freen').textContent = S.free.length;
+  $('freebox').className = S.need ? 'need' : '';
+  $('need').textContent = S.need;
+
+  // focus
+  ['req','ptree','prow','pkv'].forEach(id=>{
+    const el=$(id); el.classList.remove('focus','pulse'); el.style.animationDelay='';
+    if(S.focus.includes(id)) el.classList.add('focus');
+  });
+  if(S.focus.includes('roles')){
+    ['ptree','prow','pkv'].forEach((id,k)=>{ const el=$(id); void el.offsetWidth;
+      el.classList.add('pulse'); el.style.animationDelay=(k*1.6)+'s'; });
+  }
+
+  // overlay
+  const ov=$('ov');
+  if(S.overlay==='title'){
+    ov.innerHTML = `<h1>一个请求的 KV Cache 之旅</h1><h2>SGLang KV Cache 系列 01 · mem_cache 入门 · 约 2.5 分钟</h2>`+
+      (started ? '' : `<button class="big" onclick="play()">▶ 开始演示</button>`);
+    ov.classList.remove('hide');
+  } else if(S.overlay==='summary'){
+    ov.innerHTML = `<h1 style="font-size:40px">一句话记住</h1>
+      <div class="sum">
+        <b>RadixCache</b> 管「留什么」 · <b>Allocator</b> 管「哪里空」<br>
+        <b>KV Pool</b> 管「怎么存」 · <b>ReqToTokenPool</b> 把请求和 slot 连起来
+      </div>
+      <div class="path">
+        1. schedule_policy.py:157 &nbsp;match_prefix_for_req &nbsp;→ radix_cache.py:397<br>
+        2. allocation.py:344 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;alloc_for_extend<br>
+        3. memory_pool.py:1909 &nbsp;&nbsp;&nbsp;set_kv_buffer<br>
+        4. allocation.py:587 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;alloc_for_decode<br>
+        5. radix_cache.py:479/638 &nbsp;cache_finished_req / evict
+      </div>`;
+    ov.classList.remove('hide');
+  } else ov.classList.add('hide');
+}
+
+/* ---------------- playback ---------------- */
+let cur=0, playing=false, started=false, timer=null, voice=false, stepStart=0, remaining=0;
+const bar=$('bar');
+steps.forEach((s,k)=>{ const d=document.createElement('div'); d.title=s.title||(k?'总结':'概览'); d.onclick=()=>{goto(k); if(playing) schedule();}; bar.appendChild(d); });
+const total = steps.reduce((a,s)=>a+s.dur,0);
+
+function goto(i){
+  cur=Math.max(0,Math.min(steps.length-1,i));
+  init();
+  for(let k=0;k<=cur;k++){ clearTransient(); S.overlay=null; steps[k].act(); }
+  render(cur); updateBar(); speak();
+}
+function updateBar(){
+  [...bar.children].forEach((d,k)=>{
+    d.className = k<cur?'done':(k===cur?'cur':''); d.style.setProperty('--d', steps[k].dur+'ms');
+    if(k===cur && !playing) d.classList.add('paused');
+  });
+  const el = steps.slice(0,cur).reduce((a,s)=>a+s.dur,0)/1000;
+  $('time').textContent = `${fmt(el)} / ${fmt(total/1000)}`;
+  $('bplay').textContent = playing ? '⏸' : '▶';
+}
+function fmt(s){ s=Math.round(s); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+function schedule(){
+  clearTimeout(timer);
+  const minDur = steps[cur].dur;
+  stepStart = Date.now();
+  timer = setTimeout(advance, minDur);
+}
+function advance(){
+  // 开着朗读时，等这句读完再进入下一步
+  if(voice && speechSynthesis.speaking){ timer=setTimeout(advance, 300); return; }
+  if(cur>=steps.length-1){ playing=false; updateBar(); return; }
+  goto(cur+1); schedule();
+}
+function play(){ started=true; if(cur===steps.length-1) goto(0);
+  if(cur===0){ goto(1); } playing=true; updateBar(); schedule(); }
+function pause(){ playing=false; clearTimeout(timer); speechSynthesis.cancel(); updateBar(); }
+function toggle(){ playing?pause():play(); }
+
+function speak(){
+  if(!voice || !('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const txt = steps[cur].cap.replace(/<[^>]+>/g,'').replace(/&lt;\/s&gt;/g,'结束符').replace(/&[a-z]+;/g,'').replace(/_/g,' ');
+  const u = new SpeechSynthesisUtterance(txt); u.lang='zh-CN'; u.rate=1.08;
+  const zh = speechSynthesis.getVoices().find(v=>/zh[-_]CN/i.test(v.lang)); if(zh) u.voice=zh;
+  speechSynthesis.speak(u);
+}
+
+$('bplay').onclick=toggle;
+$('bprev').onclick=()=>{ goto(cur-1); if(playing) schedule(); };
+$('bnext').onclick=()=>{ started=true; goto(cur+1); if(playing) schedule(); };
+$('bvoice').onclick=()=>{ voice=!voice; $('bvoice').textContent = voice?'🔊 朗读':'🔇 朗读'; if(voice) speak(); else speechSynthesis.cancel(); };
+document.addEventListener('keydown',e=>{
+  if(e.code==='Space'){ e.preventDefault(); toggle(); }
+  else if(e.code==='ArrowRight') $('bnext').onclick();
+  else if(e.code==='ArrowLeft') $('bprev').onclick();
+});
+
+function fit(){ const s=Math.min(innerWidth/1300, innerHeight/800); $('wrap').style.transform=`translate(-50%,-50%) scale(${s})`; }
+addEventListener('resize', fit); fit();
+goto(0);
+</script>
+</body>
+</html>

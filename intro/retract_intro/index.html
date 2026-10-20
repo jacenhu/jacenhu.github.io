@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>显存不够时：retract · SGLang KV Cache 系列 04</title>
+<style>
+  :root{--bg:#0b1020;--panel:#121a2e;--line:#26314d;--text:#e6ebf5;--dim:#8a96b3;--gold:#facc15;--red:#ef4444}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#05070f;color:var(--text);
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;overflow:hidden}
+  code,.mono{font-family:Menlo,Consolas,monospace}
+  #wrap{position:absolute;left:50%;top:50%;width:1280px;height:780px;transform-origin:center center}
+  #stage{position:relative;width:1280px;height:720px;background:var(--bg);border-radius:14px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+  #top{position:absolute;left:24px;right:24px;top:16px;height:44px;display:flex;align-items:center;justify-content:space-between}
+  #stitle{font-size:24px;font-weight:700;letter-spacing:.5px}
+  #stitle .no{color:var(--dim);font-weight:500;margin-right:10px;font-size:18px}
+  #code{font-family:Menlo,Consolas,monospace;font-size:14px;color:#c7d2fe;background:#1e2a4a;border:1px solid #334373;padding:6px 12px;border-radius:8px}
+  #code:empty{opacity:0}
+  .panel{position:absolute;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;transition:box-shadow .3s,border-color .3s}
+  .panel h3{margin:0 0 6px;font-size:15px;display:flex;justify-content:space-between;align-items:baseline}
+  .panel h3 small{font-size:11.5px;color:var(--dim);font-weight:400}
+  .focus{border-color:#7aa2ff!important;box-shadow:0 0 0 2px rgba(122,162,255,.35),0 0 28px rgba(122,162,255,.25)}
+  #pRun{left:24px;top:70px;width:440px;height:290px}
+  #pWait{left:24px;top:370px;width:440px;height:224px}
+  #pKV{left:476px;top:70px;width:326px;height:524px}
+  #pCalc{left:814px;top:70px;width:442px;height:524px}
+  /* request cards */
+  .rq{display:flex;align-items:center;gap:10px;padding:7px 10px;border:1.5px solid #2a3656;border-radius:9px;background:#0e1527;margin-bottom:7px;transition:all .4s;animation:pop .4s ease-out}
+  .rq.pick{border-color:var(--red);box-shadow:0 0 16px rgba(239,68,68,.45);animation:blink .6s ease-in-out infinite alternate}
+  .rq.keep{border-color:#2f6b47}
+  .rq.stain{border-style:dashed}
+  .rq .nm{font-size:16px;font-weight:700;width:22px}
+  .rq .tk{display:flex;gap:2px;flex-wrap:wrap;flex:1}
+  .rq .t{font-family:Menlo,monospace;font-size:10px;padding:2px 4px;border-radius:4px;border:1px solid var(--c);background:color-mix(in srgb,var(--c) 28%,transparent)}
+  .rq .t.o{border-style:dashed;background:transparent;color:var(--c)}
+  .rq .t.n{border-style:dotted;color:var(--dim);border-color:#3b4a6e;background:transparent}
+  .rq .meta{font-family:Menlo,monospace;font-size:10.5px;color:var(--dim);text-align:right;line-height:1.35;white-space:nowrap}
+  .rq .meta b{color:var(--text);font-weight:600}
+  .rq .key{font-family:Menlo,monospace;font-size:11px;padding:1px 6px;border-radius:5px;border:1px solid #33416a;background:#18223d;color:#c7d2fe}
+  .rq .key.hl{border-color:var(--gold);color:var(--gold)}
+  .rq .badge{font-size:10.5px;padding:1px 7px;border-radius:9px;border:1px solid}
+  .rq .badge.ret{color:#fca5a5;border-color:#7f1d1d}
+  .empty{font-size:12.5px;color:var(--dim);font-style:italic}
+  @keyframes pop{from{transform:scale(.92);opacity:0}to{transform:scale(1);opacity:1}}
+  @keyframes blink{from{box-shadow:0 0 0 rgba(239,68,68,0)}to{box-shadow:0 0 18px rgba(239,68,68,.6)}}
+  /* kv grid */
+  #grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+  .slot{height:60px;border-radius:8px;border:1.5px solid #2c3858;background:#0c1222;position:relative;transition:all .45s}
+  .slot .i{position:absolute;left:5px;top:3px;font-family:Menlo,monospace;font-size:10px;color:var(--dim)}
+  .slot .t{position:absolute;left:0;right:0;bottom:6px;text-align:center;font-family:Menlo,monospace;font-size:11px}
+  .slot.reserved{opacity:.35;border-style:dashed}
+  .slot.kv{border:2px solid var(--c);background:color-mix(in srgb,var(--c) 45%,transparent)}
+  .slot.tree{border:2px solid var(--gold);background:color-mix(in srgb,var(--c) 40%,transparent)}
+  .slot.tree::after{content:'🌲';position:absolute;right:4px;top:2px;font-size:10px}
+  .slot.new{border:2px dashed var(--c);background:color-mix(in srgb,var(--c) 14%,transparent)}
+  .slot.freeing{border:2px solid var(--red);background:rgba(239,68,68,.32);animation:blink .6s ease-in-out infinite alternate}
+  .gauge{margin-top:12px;font-size:13px}
+  .gbar{display:flex;height:14px;border-radius:7px;overflow:hidden;background:#1a2340;margin:6px 0}
+  .gbar i{display:block;height:100%;transition:width .5s}
+  .grow2{display:flex;justify-content:space-between;font-family:Menlo,monospace;font-size:12px;color:var(--dim)}
+  .grow2 b{color:var(--text)}
+  .grow2 .bad{color:#fca5a5}.grow2 .ok{color:#86efac}
+  #legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;font-size:11px;color:var(--dim)}
+  #legend span{display:flex;align-items:center;gap:4px}
+  #legend i{width:12px;height:12px;border-radius:3px;display:inline-block}
+  /* calc */
+  #calc{font-family:Menlo,Consolas,monospace;font-size:11.8px;line-height:1.6;white-space:pre;color:#dbe4ff;animation:fadein .45s ease-out}
+  #calc .c{color:var(--dim)}
+  #calc .y{color:var(--gold)}
+  #calc .g{color:#86efac}
+  #calc .r{color:#fca5a5}
+  #log{margin-top:10px;font-family:Menlo,monospace;font-size:11px;line-height:1.5;color:#fde68a;background:#1c1a0c;border:1px solid #57501c;border-radius:7px;padding:6px 8px;white-space:pre-wrap;animation:fadein .4s ease-out}
+  #log:empty{display:none}
+  /* caption */
+  #cap{position:absolute;left:24px;right:24px;top:604px;height:102px;display:flex;align-items:center;justify-content:center;text-align:center;font-size:20px;line-height:1.55;padding:0 30px;
+    background:linear-gradient(180deg,rgba(18,26,46,.9),rgba(18,26,46,.6));border:1px solid var(--line);border-radius:12px}
+  #cap span{animation:fadein .5s ease-out}
+  #cap em{font-style:normal;color:var(--gold)}
+  #cap code{font-size:17px;color:#c7d2fe}
+  @keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  #ov{position:absolute;inset:0;background:radial-gradient(ellipse at center,#16224a 0%,#0b1020 70%);display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .6s;z-index:10}
+  #ov.hide{opacity:0;pointer-events:none}
+  #ov h1{font-size:50px;margin:0 0 14px;letter-spacing:2px}
+  #ov h2{font-size:22px;font-weight:400;color:var(--dim);margin:0 0 34px}
+  #ov .big{font-size:18px;padding:12px 30px;border-radius:30px;background:#4f8cff;color:#fff;border:none;cursor:pointer}
+  #ov .sum{font-size:20px;line-height:1.9;text-align:left}
+  #ov .sum b{color:var(--gold)}
+  #ov .path{margin-top:22px;font-family:Menlo,monospace;font-size:15px;color:#c7d2fe;background:#121a2e;border:1px solid var(--line);padding:14px 22px;border-radius:10px;line-height:1.9;white-space:pre}
+  #ctrl{position:absolute;left:0;right:0;top:732px;height:44px;display:flex;align-items:center;gap:12px;padding:0 6px}
+  #ctrl button{background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;min-width:40px;font-size:15px;cursor:pointer;padding:0 10px}
+  #ctrl button:hover{background:#26325a}
+  #ctrl a.home{display:flex;align-items:center;background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;padding:0 10px;font-size:13px;text-decoration:none;white-space:nowrap}
+  #ctrl a.home:hover{background:#26325a}
+  #bar{flex:1;display:flex;gap:3px;height:10px;cursor:pointer}
+  #bar div{flex:1;background:#232d4b;border-radius:3px;position:relative;overflow:hidden}
+  #bar div.done{background:#4f8cff}
+  #bar div.cur::after{content:'';position:absolute;left:0;top:0;bottom:0;background:#4f8cff;animation:fill var(--d) linear forwards}
+  #bar div.cur.paused::after{animation-play-state:paused}
+  @keyframes fill{from{width:0}to{width:100%}}
+  #time{font-size:13px;color:var(--dim);width:64px;text-align:right}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <div id="top"><div id="stitle"></div><div id="code"></div></div>
+
+    <div class="panel" id="pRun"><h3>① running batch <small>实线 = KV 已写入；虚线 = 已采样、下一步才写 KV</small></h3><div id="run"></div></div>
+    <div class="panel" id="pWait"><h3>② waiting queue <small>被撤回的请求回到这里重新排队</small></h3><div id="wait"></div></div>
+    <div class="panel" id="pKV"><h3>③ KV Pool <small>16 个 slot，slot 0 保留</small></h3>
+      <div id="grid"></div>
+      <div class="gauge" id="gauge"></div>
+      <div id="legend">
+        <span><i style="background:#4f8cff"></i>A</span><span><i style="background:#22c55e"></i>B</span>
+        <span><i style="background:#f59e0b"></i>C</span><span><i style="border:2px solid #facc15"></i>树里可淘汰 🌲</span>
+      </div>
+    </div>
+    <div class="panel" id="pCalc"><h3>④ 调度器在算什么 <small>check_decode_mem / retract_decode</small></h3><div id="calc"></div><div id="log"></div></div>
+
+    <div id="cap"></div>
+    <div id="ov"></div>
+  </div>
+
+  <div id="ctrl">
+    <a class="home" href="../index.html" title="返回目录">☰ 目录</a>
+    <button id="bprev" title="上一步 (←)">⏮</button>
+    <button id="bplay" title="自动演示/暂停 (空格)">▶</button>
+    <button id="bnext" title="下一步 (→)">⏭</button>
+    <div id="bar"></div>
+    <div id="time"></div>
+    <button id="bvoice" title="中文语音朗读">🔇 朗读</button>
+  </div>
+</div>
+
+<script>
+const COL = {A:'#4f8cff', B:'#22c55e', C:'#f59e0b', X:'#64748b'};
+const SIZE = 16;
+
+/* 请求：in = prompt，out = 已采样的 output_ids；KV 已写入 = in + out − 1（最后一个 token 的 KV 下一步写） */
+function mkReqs(){
+  return {
+    A:{in:['a0','a1','a2','a3','a4'], out:['A1','A2','A3'], slots:[1,2,3,4,5,6,7], max:64},
+    B:{in:['b0','b1','b2','b3'],      out:['B1'],           slots:[8,9,10,11],    max:64},
+    C:{in:['c0','c1'],                out:['C1'],           slots:[12,13],        max:64},
+  };
+}
+let S;
+function init(){
+  const R = mkReqs();
+  S = { R, run:['A','B','C'], wait:[], slots:Array.from({length:SIZE},(_,i)=>({o:null, st:i===0?'reserved':'free', t:''})),
+        treeX:[14,15], overlay:null };
+  Object.entries(R).forEach(([k,r])=>{ const toks=[...r.in, ...r.out.slice(0,-1)]; r.slots.forEach((s,i)=>S.slots[s]={o:k, st:'kv', t:toks[i]}); });
+  S.treeX.forEach((s,i)=>S.slots[s]={o:'X', st:'tree', t:['x0','x1'][i]});
+  clearTransient();
+}
+function clearTransient(){ S.focus=[]; S.calc=''; S.log=''; S.pick=null; S.keyHL=false; S.need=null; S.evictable=null; }
+const freeCount = () => S.slots.filter((s,i)=>i>0 && s.st==='free').length;
+const evictable = () => S.slots.filter(s=>s.st==='tree').length;
+function freeSlots(list){ list.forEach(s=>S.slots[s]={o:null, st:'free', t:''}); }
+function evictX(){ freeSlots(S.treeX); S.treeX=[]; }
+function retractB(){ const b=S.R.B; freeSlots(b.slots); b.slots=[]; b.retracted=true; S.run=S.run.filter(x=>x!=='B'); S.wait.push('B'); }
+function decodeAC(){
+  const free=[]; for(let i=1;i<SIZE;i++) if(S.slots[i].st==='free') free.push(i);
+  ['A','C'].forEach((k,j)=>{ const r=S.R[k], s=free[j]; S.slots[s]={o:k, st:'new', t:r.out[r.out.length-1]}; r.slots.push(s); r.out.push(k+(r.out.length+1)); });
+}
+
+const steps = [
+ { title:'', code:'', dur:5000,
+   cap:'decode 跑着跑着，KV pool 满了，淘汰也腾不出空间。这时调度器会<em>把一个正在 decode 的请求撤回去</em>。',
+   act(){ S.overlay='title'; } },
+
+ { title:'设定', code:'', dur:9500,
+   cap:'KV pool 只有 15 个可用 slot：A、B、C 三个请求在 decode，树里还有一段<em>没人用的旧前缀</em>（2 个 slot）。空闲 slot <em>为 0</em>。',
+   act(){ S.calc=`<span class="c"># 每个请求：KV 已写入 = prompt + 已生成 − 1</span>
+A：5 + 3 − 1 = <span class="y">7</span>
+B：4 + 1 − 1 = <span class="y">4</span>
+C：2 + 1 − 1 = <span class="y">2</span>
+树里旧前缀（lock_ref 0）：<span class="y">2</span>
+合计 15 → 空闲 <span class="r">0</span>`;
+     S.focus=['pRun','pKV']; } },
+
+ { title:'下一步要几个 slot', code:'managers/schedule_batch.py:3121  new_tokens_required_next_decode', dur:9000,
+   cap:'下一轮 decode，每个请求要为最后一个 token 写 KV：<em>page_size = 1 时每个请求 1 个</em>，一共需要 3 个。',
+   act(){ S.need=3; S.calc=`<span class="c"># 非投机解码</span>
+new_pages = sum(1 for r in reqs
+                if r.kv_committed_len % page_size == 0)
+          = 3                    <span class="c"># page_size 1 时恒成立</span>
+num_tokens = new_pages × page_size = <span class="y">3</span>`;
+     S.focus=['pCalc','pRun']; } },
+
+ { title:'先淘汰，再判断', code:'mem_cache/allocator/base.py:79  check_decode_capacity', dur:10000,
+   cap:'检查时会<em>先淘汰树里没被锁的 KV</em>：旧前缀的 2 个 slot 被回收。可用变成 2，还是<em>小于需要的 3</em>。',
+   act(){ S.need=3; evictX();
+     S.calc=`<span class="c"># check_decode_capacity</span>
+evict_to_free_tokens(tree_cache, 3)  → 回收旧前缀 2 个
+return available_size() >= num_tokens
+       2 >= 3  <span class="r">False</span>`;
+     S.focus=['pKV','pCalc']; } },
+
+ { title:'触发 retract', code:'managers/scheduler.py:4166  update_running_batch', dur:8500,
+   cap:'<code>check_decode_mem()</code> 返回 False，调度器进入 <code>retract_decode()</code>：<em>撤回请求，直到剩下的放得下</em>。',
+   act(){ S.need=3; evictX();
+     S.calc=`if (kv_full_retract_flag :=
+        not batch.check_decode_mem()):
+    old_available = 2
+    old_ratio     = 0.0980
+    retracted, new_ratio, aborts = <span class="y">batch.retract_decode()</span>`;
+     S.focus=['pCalc']; } },
+
+ { title:'先撤谁', code:'managers/schedule_batch.py:3266  length_key', dur:11500,
+   cap:'按 <em>(已生成数, −prompt 长度)</em> 从大到小排，<em>从末尾开始撤</em>。B、C 都只生成 1 个，B 的 prompt 更长，所以<em>先撤 B</em>。',
+   act(){ S.need=3; evictX(); S.keyHL=true; S.pick='B';
+     S.calc=`<span class="c"># _get_decode_retraction_order：留下的优先级</span>
+key = (len(output_ids), −len(origin_input_ids))
+A：(3, −5)
+C：(1, −2)
+B：(1, −4)    <span class="c"># 和 C 打平，prompt 更长</span>
+sorted(reverse=True) = [A, C, <span class="r">B</span>] → pop() = <span class="r">B</span>
+<span class="c"># 生成得少 = 浪费的计算少；prompt 长 = 腾出的 KV 多</span>`;
+     S.focus=['pRun','pCalc']; } },
+
+ { title:'释放 B：不进树', code:'managers/schedule_batch.py:2191  release_req', dur:11000,
+   cap:'B 的 4 个 slot <em>直接释放，不插入 radix tree</em>：现在就要这块空间。之后 B 回来，这段 KV 只能<em>重新算</em>。',
+   act(){ S.need=3; evictX(); S.R.B.slots.forEach(s=>S.slots[s].st='freeing');
+     S.calc=`<span class="c"># release memory and don't insert into the tree</span>
+<span class="c"># because we need the space instantly</span>
+release_kv_cache(req, tree_cache, <span class="y">is_insert=False</span>)
+  → 释放 slot [8, 9, 10, 11]
+evict_from_tree_cache(剩余 2 个 × 20)
+<span class="c"># TODO：被抢占的请求也许可以插入树</span>`;
+     S.focus=['pKV','pCalc']; } },
+
+ { title:'再检查：放得下了', code:'managers/schedule_batch.py:3177  while not check_decode_mem', dur:9500,
+   cap:'只剩 A、C，下一步需要 2 个；可用变成 <em>6 个</em>，循环结束。<em>只撤了 B 一个</em>，A、C 不受影响。',
+   act(){ S.need=2; evictX(); retractB();
+     S.calc=`while first_iter or not check_decode_mem(
+        selected_indices=[A, C]):
+    ...
+需要 = 2，可用 = 2 + 4 = <span class="g">6 ✓</span> → 退出循环
+filter_batch(keep_indices=[A, C])`;
+     S.focus=['pKV','pRun']; } },
+
+ { title:'重置 B 的状态', code:'managers/schedule_batch.py:1885  reset_for_retract', dur:10500,
+   cap:'B 的 KV 相关状态全部清空：<code>prefix_indices</code>、<code>kv_committed_len = 0</code>。但<em>已生成的 B1 保留</em>，重新 prefill 时一起算。',
+   act(){ S.need=2; evictX(); retractB();
+     S.calc=`retraction_count += 1          → <span class="y">1</span>
+prefix_indices   = []
+last_node        = None
+cache_protected_len = 0，kv_committed_len = 0
+is_retracted = retracted_stain = True
+output_ids       = <span class="g">[B1]  保留</span>
+<span class="c"># 只有 input_embeds 请求才清空 output_ids</span>`;
+     S.focus=['pWait','pCalc']; } },
+
+ { title:'调高 new_token_ratio', code:'scheduler_components/new_token_ratio_tracker.py:41', dur:11000,
+   cap:'调度器按剩下的请求<em>重新估算</em> new_token_ratio：从衰减后的 0.098 <em>拉回到 0.341</em>，并打印一条 warning。',
+   act(){ S.need=2; evictX(); retractB();
+     S.calc=`<span class="c"># estimate_new_token_ratio_after_retract([A, C])</span>
+decoded = 3 + 1 = 4
+ratio = (decoded + 20 × 2) / (64 + 64 + 1)
+      = 44 / 129 = <span class="y">0.3411</span>
+<span class="c"># 平时每步 decay：0.7 → 最低 0.7 × 0.14 = 0.098</span>`;
+     S.log=`WARNING  KV cache pool is full. Retract requests. #retracted_reqs: 1, #new_tokens_gained: 4, #new_token_ratio: 0.0980 -> 0.3411`;
+     S.focus=['pCalc']; } },
+
+ { title:'为什么要调高', code:'managers/schedule_policy.py:710  _get_running_request_total_token_offset', dur:11000,
+   cap:'接新请求时，要给 running 请求<em>预留未来的 token</em>：剩余 max_new_tokens × ratio。ratio 变大，<em>预留更多、少接新请求</em>，避免马上又撤。',
+   act(){ S.need=2; evictX(); retractB();
+     S.calc=`<span class="c"># PrefillAdder 给每个 running 请求预留</span>
+offset = min(max_new − len(output_ids), CLIP) × ratio
+A：(64 − 3) × 0.098 ≈  6   →  × 0.341 ≈ <span class="y">21</span>
+C：(64 − 1) × 0.098 ≈  6   →  × 0.341 ≈ <span class="y">21</span>
+<span class="c"># 之后没再撤，就每步 decay_step() 慢慢降回去</span>`;
+     S.focus=['pCalc']; } },
+
+ { title:'B 回到等待队列', code:'managers/scheduler.py:4226  _add_request_to_queue', dur:8500,
+   cap:'B 以 <code>is_retracted=True</code> <em>排到 waiting queue 末尾</em>，和新请求一起等下一次 prefill。',
+   act(){ S.need=2; evictX(); retractB();
+     S.calc=`for req in retracted_reqs:
+    self._add_request_to_queue(req, is_retracted=True)
+<span class="c"># 普通模式：append 到 waiting_queue</span>
+<span class="c"># PD decode：放进 disagg_decode_prealloc_queue</span>`;
+     S.focus=['pWait']; } },
+
+ { title:'A、C 继续 decode', code:'mem_cache/allocation.py:587  alloc_for_decode', dur:8500,
+   cap:'A、C 各拿 1 个 slot 写入 A3、C1 的 KV，采样出 A4、C2。<em>这一步没有失败</em>，用户只看到 B 慢了一点。',
+   act(){ S.need=null; evictX(); retractB(); decodeAC();
+     S.calc=`alloc_for_decode(batch, token_per_req=1)
+A3 → slot 8，C1 → slot 9
+<span class="c"># 空闲剩 4</span>`;
+     S.focus=['pKV','pRun']; } },
+
+ { title:'B 重新 prefill', code:'managers/schedule_batch.py:1487  get_fill_ids', dur:11000,
+   cap:'B 被重新调度时要算 <em>prompt + 已生成</em>，共 5 个 token。之前的 KV 没进树，<em>前缀命中 0</em>，全部重算后采样出 B2。',
+   act(){ S.need=null; evictX(); retractB(); decodeAC();
+     S.calc=`fill_ids = origin_input_ids + output_ids
+         = b0 b1 b2 b3 + B1 = <span class="y">5</span> 个
+match_prefix → <span class="r">0</span>（KV 没有插入树）
+retracted_stain → 准入预算按重新 prefill 计
+<span class="c"># 浪费 = 4 + 1 个 token 的计算</span>`;
+     S.focus=['pWait','pCalc']; } },
+
+ { title:'边界：只剩一个也放不下', code:'managers/schedule_batch.py:3230  Out of memory even after retracting', dur:11000,
+   cap:'retract 至少<em>保留一个请求</em>。如果只剩它一个还是放不下，就<em>直接 abort</em>，返回 HTTP 500，而不是让调度器崩溃。',
+   act(){ S.need=null; evictX(); retractB(); decodeAC();
+     S.calc=`if len(sorted_indices) == 1: break   <span class="c"># 至少留一个</span>
+...
+if len(sorted_indices) <= 1 and not check_decode_mem():
+    last_req.to_finish = FINISH_ABORT(
+      "Out of memory even after retracting all other
+       requests in the decode batch...", <span class="r">500</span>)
+<span class="c"># 常见原因：单个请求的上下文比整个 KV pool 还大</span>`;
+     S.focus=['pCalc']; } },
+
+ { title:'边界：PD 分离的 Decode', code:'managers/schedule_batch.py:2183  retraction_backup', dur:11000,
+   cap:'PD 分离的 Decode 侧没法自己重算 prefill，所以撤回前先把 KV <em>备份到主机内存</em>，恢复时<em>直接拷回</em>，不用重算。',
+   act(){ S.need=null; evictX(); retractB(); decodeAC();
+     S.calc=`if disaggregation_mode == "decode" and offload_kv:
+    backup_saved = retraction_backup(...)   <span class="c"># D2H</span>
+<span class="c"># 恢复：disaggregation/decode.py:863</span>
+resume_retracted_reqs → 预分配 → retraction_restore
+主机备份池满 → 这个请求只能 <span class="r">abort</span>`;
+     S.focus=['pCalc','pWait']; } },
+
+ { title:'边界：按优先级撤', code:'managers/schedule_batch.py:3269  retraction_policy == "priority"', dur:10000,
+   cap:'默认按长度挑。设 <code>--retraction-policy priority</code> 后，<em>优先级排在 key 的最前面</em>，先撤低优先级的请求。',
+   act(){ S.need=null; evictX(); retractB(); decodeAC();
+     S.calc=`<span class="c"># --retraction-policy</span>
+length   （默认）先撤生成少、prompt 长的
+priority  key = (priority, len(output_ids), −len(input))
+          方向和 priority scheduling 一致
+<span class="c"># Beam search 组不能撤回，只能 abort</span>`;
+     S.focus=['pCalc']; } },
+
+ { title:'', code:'', dur:13000,
+   cap:'看日志里的 “KV cache pool is full. Retract requests.”，就在这 5 个位置打断点，确认是谁被撤、腾出了多少。',
+   act(){ S.overlay='summary'; } },
+];
+
+/* ---------------- render ---------------- */
+const $ = id => document.getElementById(id);
+function reqHTML(k, where){
+  const r=S.R[k], c=COL[k];
+  const kvToks = r.retracted ? [] : [...r.in, ...r.out.slice(0,-1)];
+  const toks = r.retracted
+    ? [...r.in, ...r.out].map(t=>`<span class="t n">${t}</span>`).join('')
+    : kvToks.map(t=>`<span class="t" style="--c:${c}">${t}</span>`).join('') + `<span class="t o" style="--c:${c}">${r.out[r.out.length-1]}</span>`;
+  const key = `(${r.out.length}, −${r.in.length})`;
+  const meta = r.retracted
+    ? `<span class="badge ret">retracted × 1</span><br>待算 ${r.in.length + r.out.length} 个`
+    : `KV <b>${r.slots.length}</b> · out <b>${r.out.length}</b>`;
+  const cls = 'rq' + (S.pick===k?' pick':'') + (where==='run' && S.pick && S.pick!==k?' keep':'') + (r.retracted?' stain':'');
+  return `<div class="${cls}"><span class="nm" style="color:${c}">${k}</span><div class="tk">${toks}</div>
+    ${where==='run'?`<span class="key${S.keyHL?' hl':''}">${key}</span>`:''}<div class="meta">${meta}</div></div>`;
+}
+function gaugeHTML(){
+  const used = S.slots.filter((s,i)=>i>0 && (s.st==='kv'||s.st==='new')).length, tr=evictable(), fr=freeCount();
+  const need = S.need;
+  return `<div class="grow2"><span>已用 <b>${used}</b> · 可淘汰 <b>${tr}</b> · 空闲 <b>${fr}</b></span>${need!==null?`<span>下一步需要 <b>${need}</b> → <span class="${fr>=need?'ok':'bad'}">${fr>=need?'够':'不够'}</span></span>`:''}</div>
+    <div class="gbar"><i style="width:${used/15*100}%;background:#4f8cff"></i><i style="width:${tr/15*100}%;background:#facc15"></i><i style="width:${fr/15*100}%;background:#1f6f43"></i></div>`;
+}
+function render(i){
+  const st=steps[i];
+  $('stitle').innerHTML = st.title ? `<span class="no">${String(i).padStart(2,'0')}</span>${st.title}` : '';
+  $('code').textContent = st.code;
+  $('cap').innerHTML = `<span>${st.cap}</span>`;
+  $('run').innerHTML = S.run.map(k=>reqHTML(k,'run')).join('');
+  $('wait').innerHTML = S.wait.length ? S.wait.map(k=>reqHTML(k,'wait')).join('') : '<span class="empty">（空）</span>';
+  $('grid').innerHTML = S.slots.map((s,i)=>`<div class="slot${s.st!=='free'?' '+s.st:''}" style="--c:${COL[s.o]||'#2c3858'}"><span class="i">${i}</span><span class="t">${s.st==='reserved'?'保留':s.t}</span></div>`).join('');
+  $('gauge').innerHTML = gaugeHTML();
+  const c=$('calc'); c.innerHTML=S.calc; c.style.animation='none'; void c.offsetWidth; c.style.animation='';
+  $('log').textContent = S.log;
+  ['pRun','pWait','pKV','pCalc'].forEach(id=>$(id).classList.toggle('focus', S.focus.includes(id)));
+  const ov=$('ov');
+  if(S.overlay==='title'){
+    ov.innerHTML = `<h1>显存不够时：retract</h1><h2>SGLang KV Cache 系列 04 · 撤回一个 decode 请求 · 约 3 分钟</h2>`+
+      (started ? '' : `<button class="big" onclick="play()">▶ 开始演示</button>`);
+    ov.classList.remove('hide');
+  } else if(S.overlay==='summary'){
+    ov.innerHTML = `<h1 style="font-size:40px">一句话记住</h1>
+      <div class="sum">每步 decode 前先算<b>要几个 slot</b>，先淘汰树里没锁的，还不够才 <b>retract</b><br>
+      默认先撤<b>生成少、prompt 长</b>的；KV <b>直接释放、不进树</b>，output_ids 保留<br>
+      撤完调高 <b>new_token_ratio</b>，少接新请求；PD Decode 侧<b>备份到主机</b>而不是重算</div>
+      <div class="path">1. scheduler.py:4166         update_running_batch    触发点
+2. schedule_batch.py:3150   check_decode_mem        够不够
+3. schedule_batch.py:3266   length_key              撤谁
+4. schedule_batch.py:2163   release_req             释放了什么
+5. new_token_ratio_tracker.py:41  estimate_...      ratio 怎么变</div>`;
+    ov.classList.remove('hide');
+  } else ov.classList.add('hide');
+}
+
+/* ---------------- playback ---------------- */
+let cur=0, playing=false, started=false, timer=null, voice=false;
+const bar=$('bar');
+steps.forEach((s,k)=>{ const d=document.createElement('div'); d.title=s.title||(k?'总结':'概览'); d.onclick=()=>{goto(k); if(playing) schedule();}; bar.appendChild(d); });
+const total = steps.reduce((a,s)=>a+s.dur,0);
+function goto(i){
+  cur=Math.max(0,Math.min(steps.length-1,i));
+  // 每一步都从初始状态出发，只执行当前步的 act（各步自带前置操作），保证跳转一致
+  init(); clearTransient(); S.overlay=null; steps[cur].act();
+  render(cur); updateBar(); speak();
+}
+function updateBar(){
+  [...bar.children].forEach((d,k)=>{ d.className = k<cur?'done':(k===cur?'cur':''); d.style.setProperty('--d', steps[k].dur+'ms'); if(k===cur && !playing) d.classList.add('paused'); });
+  const el = steps.slice(0,cur).reduce((a,s)=>a+s.dur,0)/1000;
+  $('time').textContent = `${fmt(el)} / ${fmt(total/1000)}`;
+  $('bplay').textContent = playing ? '⏸' : '▶';
+}
+function fmt(s){ s=Math.round(s); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+function schedule(){ clearTimeout(timer); timer=setTimeout(advance, steps[cur].dur); }
+function advance(){
+  if(voice && speechSynthesis.speaking){ timer=setTimeout(advance, 300); return; }
+  if(cur>=steps.length-1){ playing=false; updateBar(); return; }
+  goto(cur+1); schedule();
+}
+function play(){ started=true; if(cur===steps.length-1) goto(0); if(cur===0) goto(1); playing=true; updateBar(); schedule(); }
+function pause(){ playing=false; clearTimeout(timer); speechSynthesis.cancel(); updateBar(); }
+function toggle(){ playing?pause():play(); }
+function speak(){
+  if(!voice || !('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const txt = steps[cur].cap.replace(/<[^>]+>/g,'').replace(/&[a-z]+;/g,'').replace(/_/g,' ').replace(/−/g,'负');
+  const u = new SpeechSynthesisUtterance(txt); u.lang='zh-CN'; u.rate=1.08;
+  const zh = speechSynthesis.getVoices().find(v=>/zh[-_]CN/i.test(v.lang)); if(zh) u.voice=zh;
+  speechSynthesis.speak(u);
+}
+$('bplay').onclick=toggle;
+$('bprev').onclick=()=>{ goto(cur-1); if(playing) schedule(); };
+$('bnext').onclick=()=>{ started=true; goto(cur+1); if(playing) schedule(); };
+$('bvoice').onclick=()=>{ voice=!voice; $('bvoice').textContent = voice?'🔊 朗读':'🔇 朗读'; if(voice) speak(); else speechSynthesis.cancel(); };
+document.addEventListener('keydown',e=>{
+  if(e.code==='Space'){ e.preventDefault(); toggle(); }
+  else if(e.code==='ArrowRight') $('bnext').onclick();
+  else if(e.code==='ArrowLeft') $('bprev').onclick();
+});
+function fit(){ const s=Math.min(innerWidth/1300, innerHeight/800); $('wrap').style.transform=`translate(-50%,-50%) scale(${s})`; }
+addEventListener('resize', fit); fit();
+goto(0);
+</script>
+</body>
+</html>

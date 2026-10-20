@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>PD 传输：KV 按 head 切分 · SGLang KV Cache 系列 06</title>
+<style>
+  :root{--bg:#0b1020;--panel:#121a2e;--line:#26314d;--text:#e6ebf5;--dim:#8a96b3;--gold:#facc15;--red:#ef4444}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#05070f;color:var(--text);
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;overflow:hidden}
+  #wrap{position:absolute;left:50%;top:50%;width:1280px;height:780px;transform-origin:center center}
+  #stage{position:relative;width:1280px;height:720px;background:var(--bg);border-radius:14px;overflow:hidden;
+    box-shadow:0 20px 60px rgba(0,0,0,.6)}
+  code,.mono{font-family:Menlo,Consolas,monospace}
+  /* top bar */
+  #top{position:absolute;left:24px;right:24px;top:16px;height:44px;display:flex;align-items:center;justify-content:space-between}
+  #stitle{font-size:24px;font-weight:700;letter-spacing:.5px}
+  #stitle .no{color:var(--dim);font-weight:500;margin-right:10px;font-size:18px}
+  #code{font-family:Menlo,Consolas,monospace;font-size:14px;color:#c7d2fe;background:#1e2a4a;border:1px solid #334373;
+    padding:6px 12px;border-radius:8px;transition:opacity .3s}
+  #code:empty{opacity:0}
+  /* config bar */
+  #cfg{position:absolute;left:24px;right:24px;top:66px;height:32px;display:flex;align-items:center;gap:22px;
+    padding:0 16px;background:var(--panel);border:1px solid var(--line);border-radius:10px;font-size:13.5px;transition:all .3s}
+  #cfg b{color:var(--gold);font-weight:600}
+  #cfg .sep{color:#3b4a6e}
+  /* panels */
+  .panel{position:absolute;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;
+    transition:box-shadow .3s,border-color .3s}
+  .panel h3{margin:0 0 8px;font-size:15px;display:flex;justify-content:space-between;align-items:baseline}
+  .panel h3 small{font-size:11.5px;color:var(--dim);font-weight:400}
+  .focus{border-color:#7aa2ff!important;box-shadow:0 0 0 2px rgba(122,162,255,.35),0 0 28px rgba(122,162,255,.25)}
+  #pP{left:24px;top:108px;width:260px;height:482px}
+  #pD{left:500px;top:108px;width:260px;height:482px}
+  #pHS{left:784px;top:108px;width:472px;height:214px}
+  #pAddr{left:784px;top:334px;width:472px;height:256px}
+  /* cards */
+  .card{background:#0e1527;border:1px solid #2a3656;border-radius:9px;transition:all .4s;animation:pop .4s ease-out}
+  .card.unused{opacity:.28}
+  .card.hl{border-color:var(--gold);box-shadow:0 0 16px rgba(250,204,21,.35)}
+  .pcard{padding:7px 9px;margin-bottom:10px;height:208px}
+  .ctitle{font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px;margin-bottom:5px}
+  .ctitle .by{margin-left:auto;font-size:10.5px;color:var(--dim);font-weight:400}
+  .hchip{font-family:Menlo,monospace;font-size:10.5px;font-weight:600;padding:1px 6px;border-radius:5px;
+    color:#fff;background:color-mix(in srgb,var(--c) 55%,transparent);border:1px solid var(--c)}
+  .pgrid{display:grid;gap:4px}
+  .pgrid .sl{font-family:Menlo,monospace;font-size:10.5px;color:var(--dim);display:flex;align-items:center;justify-content:flex-end;padding-right:3px}
+  .pgrid .hd{font-family:Menlo,monospace;font-size:10px;text-align:center;color:var(--c)}
+  .dcard{display:flex;gap:8px;padding:5px 8px;margin-bottom:8px;height:104px}
+  .dside{width:56px;flex:none;display:flex;flex-direction:column;gap:4px;justify-content:center}
+  .dside .nm{font-size:17px;font-weight:700}
+  .dside .by{font-size:9.5px;color:var(--dim);line-height:1.25}
+  .dgrid{flex:1;display:grid;grid-template-columns:16px 1fr;grid-auto-rows:16px;row-gap:2px;column-gap:4px}
+  .dgrid .sl{font-family:Menlo,monospace;font-size:10px;color:var(--dim);display:flex;align-items:center;justify-content:flex-end}
+  .cell{border-radius:5px;border:1px solid #26314d;background:#0b1121;font-family:Menlo,monospace;font-size:11px;
+    display:flex;align-items:center;justify-content:center;transition:all .4s;color:#cbd5e1}
+  .pgrid .cell{height:28px}
+  .cell.alloc{border:1.5px dashed var(--c);color:var(--c);background:color-mix(in srgb,var(--c) 8%,transparent)}
+  .cell.kv,.cell.recv{border:1.5px solid var(--c);background:color-mix(in srgb,var(--c) 42%,transparent);color:#fff}
+  .cell.recv{animation:land .6s ease-out}
+  .cell.hl{box-shadow:0 0 0 2px var(--gold),0 0 14px rgba(250,204,21,.55)}
+  @keyframes land{0%{transform:scale(1.35);filter:brightness(1.8)}100%{transform:none;filter:none}}
+  @keyframes pop{from{transform:scale(.85);opacity:0}to{transform:scale(1);opacity:1}}
+  /* handshake */
+  #hs{font-size:13px;line-height:1.5}
+  .maprow{display:flex;align-items:center;gap:8px;margin-bottom:5px;animation:pop .35s ease-out}
+  .maprow .tag{font-family:Menlo,monospace;font-weight:700;padding:1px 8px;border-radius:5px;background:#1b2440;border:1px solid #33416a}
+  .maprow .ar{color:var(--dim)}
+  .maprow .meta{font-family:Menlo,monospace;font-size:11.5px;color:#c7d2fe;background:#18223d;border-radius:5px;padding:1px 7px;animation:pop .4s ease-out}
+  .cnt{margin-top:8px;display:flex;gap:12px;animation:pop .4s ease-out}
+  .cnt div{font-family:Menlo,monospace;font-size:12.5px;padding:4px 10px;border-radius:7px;border:1px solid #33416a;background:#18223d}
+  .cnt div.ok{border-color:#22c55e;color:#86efac}
+  .rev{display:grid;grid-template-columns:auto auto auto;gap:6px 10px;align-items:center;justify-content:start;font-size:13px;margin-top:4px}
+  .rev .box{font-family:Menlo,monospace;font-weight:700;padding:3px 10px;border-radius:6px;border:1.5px solid #a78bfa;background:rgba(167,139,250,.18);text-align:center}
+  .rev .box.dummy{border:1.5px dashed #64748b;background:transparent;color:#94a3b8;font-weight:400}
+  .rev .lab{font-size:12px;color:var(--dim)}
+  /* addr */
+  #addr{font-family:Menlo,Consolas,monospace;font-size:12.5px;line-height:1.62;white-space:pre;color:#dbe4ff;animation:fadein .45s ease-out}
+  #addr .c{color:var(--dim)}
+  #addr .y{color:var(--gold)}
+  #addr .g{color:#86efac}
+  #addr .r{color:#fca5a5}
+  #addr .on{background:rgba(250,204,21,.16);outline:1px solid rgba(250,204,21,.5);border-radius:3px}
+  .ph{font-size:12.5px;color:var(--dim);font-style:italic}
+  /* arrows */
+  #arrows{position:absolute;inset:0;pointer-events:none;z-index:5}
+  #arrows .flow{stroke-dasharray:7 5;animation:flow .8s linear infinite}
+  #arrows .link{stroke-dasharray:3 5;opacity:.75}
+  #arrows .dim{opacity:.18}
+  #arrows .draw{animation:draw .9s ease-out both}
+  @keyframes flow{to{stroke-dashoffset:-24}}
+  /* caption */
+  #cap{position:absolute;left:24px;right:24px;top:602px;height:104px;display:flex;align-items:center;justify-content:center;
+    text-align:center;font-size:20px;line-height:1.55;padding:0 30px;background:linear-gradient(180deg,rgba(18,26,46,.9),rgba(18,26,46,.6));
+    border:1px solid var(--line);border-radius:12px}
+  #cap span{animation:fadein .5s ease-out}
+  #cap em{font-style:normal;color:var(--gold)}
+  #cap code{font-size:17px;color:#c7d2fe}
+  @keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  /* overlay */
+  #ov{position:absolute;inset:0;background:radial-gradient(ellipse at center,#16224a 0%,#0b1020 70%);display:flex;flex-direction:column;
+    align-items:center;justify-content:center;transition:opacity .6s;z-index:10}
+  #ov.hide{opacity:0;pointer-events:none}
+  #ov h1{font-size:50px;margin:0 0 14px;letter-spacing:2px}
+  #ov h2{font-size:22px;font-weight:400;color:var(--dim);margin:0 0 34px}
+  #ov .big{font-size:18px;padding:12px 30px;border-radius:30px;background:#4f8cff;color:#fff;border:none;cursor:pointer}
+  #ov .sum{font-size:21px;line-height:2;text-align:center}
+  #ov .sum b{color:var(--gold)}
+  #ov .path{margin-top:22px;font-family:Menlo,monospace;font-size:15px;color:#c7d2fe;background:#121a2e;border:1px solid var(--line);
+    padding:14px 22px;border-radius:10px;line-height:1.9}
+  /* controls */
+  #ctrl{position:absolute;left:0;right:0;top:732px;height:44px;display:flex;align-items:center;gap:12px;padding:0 6px}
+  #ctrl button{background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;min-width:40px;
+    font-size:15px;cursor:pointer;padding:0 10px}
+  #ctrl button:hover{background:#26325a}
+  #ctrl a.home{display:flex;align-items:center;background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;padding:0 10px;font-size:13px;text-decoration:none;white-space:nowrap}
+  #ctrl a.home:hover{background:#26325a}
+  #bar{flex:1;display:flex;gap:3px;height:10px;cursor:pointer}
+  #bar div{flex:1;background:#232d4b;border-radius:3px;position:relative;overflow:hidden}
+  #bar div.done{background:#4f8cff}
+  #bar div.cur::after{content:'';position:absolute;left:0;top:0;bottom:0;background:#4f8cff;animation:fill var(--d) linear forwards}
+  #bar div.cur.paused::after{animation-play-state:paused}
+  @keyframes fill{from{width:0}to{width:100%}}
+  #time{font-size:13px;color:var(--dim);width:64px;text-align:right}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <div id="top"><div id="stitle"></div><div id="code"></div></div>
+    <div id="cfg"></div>
+
+    <div class="panel" id="pP"><h3>① Prefill <small>算 KV，按 head 切出去</small></h3><div id="pcards"></div></div>
+    <div class="panel" id="pD"><h3>④ Decode <small>预分配 slot，被写入</small></h3><div id="dcards"></div></div>
+    <div class="panel" id="pHS"><h3>② 握手 <small>rank 映射 + 元数据</small></h3><div id="hs"></div></div>
+    <div class="panel" id="pAddr"><h3>③ 地址计算 <small>(源地址, 目的地址, 长度)</small></h3><div id="addr"></div></div>
+
+    <svg id="arrows" viewBox="0 0 1280 720" width="1280" height="720"><defs id="adefs"></defs><g id="ag"></g></svg>
+
+    <div id="cap"></div>
+    <div id="ov"></div>
+  </div>
+
+  <div id="ctrl">
+    <a class="home" href="../index.html" title="返回目录">☰ 目录</a>
+    <button id="bprev" title="上一步 (←)">⏮</button>
+    <button id="bplay" title="自动演示/暂停 (空格)">▶</button>
+    <button id="bnext" title="下一步 (→)">⏭</button>
+    <div id="bar"></div>
+    <div id="time"></div>
+    <button id="bvoice" title="中文语音朗读">🔇 朗读</button>
+  </div>
+</div>
+
+<script>
+const HC = {0:'#4f8cff', 1:'#22c55e', 2:'#f59e0b', 3:'#ec4899', L:'#a78bfa'};
+const NS = 5;                       // 每张卡画 5 个 slot
+const T  = ['t0','t1','t2'];        // 请求的 3 个 token
+const PS = [3,0,4];                 // Prefill 侧这 3 个 token 的 slot
+const DS = [1,3,4];                 // Decode 预分配的 slot（4 张卡相同）
+
+let S;
+function grid(m){ return Array.from({length:NS}, ()=>Array.from({length:m}, ()=>null)); }
+function init(){
+  S = {
+    cfg:{heads:4, pTP:2, dTP:4, mla:false},
+    pHeads:[[0,1],[2,3]], pUnused:[false,false], dHeads:[[0],[1],[2],[3]],
+    pc:[grid(2),grid(2)], dc:[grid(1),grid(1),grid(1),grid(1)],
+    pBy:'', dBy:'',
+    hs:{map:false, metas:false, cnt:false, reverse:false},
+    overlay:null,
+  };
+  clearTransient();
+}
+function clearTransient(){ S.focus=[]; S.hl=[]; S.hlCards=[]; S.arrows=[]; S.addr=''; }
+
+// ---- 小工具 ----
+function fillP(st){ S.pc.forEach((g,r)=>{ if(S.pUnused[r]) return; PS.forEach((s,i)=>g[s].forEach((_,j)=>g[s][j]={tok:T[i],st})); }); }
+function allocD(){ S.dc.forEach(g=>DS.forEach((s,i)=>g[s][0]={tok:T[i],st:'alloc'})); }
+function recvD(r){ DS.forEach((s,i)=>S.dc[r][s][0]={tok:T[i],st:'recv'}); }
+function target(r){ return Math.floor(r / (S.cfg.dTP / S.cfg.pTP)); }
+// 一张 D 卡从 P 卡的第 j 列收 3 个 token
+function dataArrows(p, j, d, kind){ return PS.map((s,i)=>({from:`p${p}-s${s}-c${j}`, fromCard:`pc${p}`, to:`d${d}-s${DS[i]}`, toCard:`dc${d}`,
+                                                          color:HC[S.pHeads[p][j]], kind:kind||'flow'})); }
+function links(){ return [0,1,2,3].map(d=>({fromCard:`pc${target(d)}`, toCard:`dc${d}`, color:'#64748b', kind:'link'})); }
+function setMHA(){
+  S.cfg={heads:4,pTP:2,dTP:4,mla:false};
+  S.pHeads=[[0,1],[2,3]]; S.pUnused=[false,false]; S.dHeads=[[0],[1],[2],[3]];
+  S.pc=[grid(2),grid(2)]; S.dc=[grid(1),grid(1),grid(1),grid(1)];
+}
+
+const steps = [
+ { title:'', code:'', dur:5000,
+   cap:'Prefill 用 TP=2、Decode 用 TP=4 时，KV 怎么从 2 张卡<em>按 head 切开</em>，写到 4 张卡上？',
+   act(){ S.overlay='title'; } },
+
+ { title:'登场角色', code:'memory_pool.py:2411  get_contiguous_buf_infos', dur:9000,
+   cap:'左边是 Prefill 的 2 张卡，右边是 Decode 的 4 张卡。KV pool 里<em>每行是一个 token slot</em>，行内按 head 依次排开。',
+   act(){ S.focus=['pP','pD']; } },
+
+ { title:'TP 决定每张卡存几个 head', code:'kv_cache_configurator.py:2064  _build_mha_kv_pool', dur:9500,
+   cap:'4 个 KV head 分给 P 的 2 张卡，<em>每卡 2 个</em>；分给 D 的 4 张卡，<em>每卡 1 个</em>。所以两边一行的字节数不一样。',
+   act(){ S.pBy='每行 512 B'; S.dBy='每行<br>256 B';
+     S.addr=`<span class="c"># 一层 KV pool 的形状</span>
+[slots, heads_per_rank, head_dim]
+
+head_dim = 128, bf16 → 每个 head <span class="y">256 B</span>
+<span class="c">get_num_kv_heads(tp) = total_kv_heads // tp</span>
+P：4 // 2 = 2 head → 每行 <span class="y">512 B</span>
+D：4 // 4 = 1 head → 每行 <span class="y">256 B</span>`;
+     S.focus=['pP','pD','pAddr']; } },
+
+ { title:'Decode 先预分配 slot', code:'decode.py:1130  pop_preallocated', dur:8500,
+   cap:'请求先到 Decode。D 为 3 个 token 预分配 slot <code>[1,3,4]</code>，<em>4 张卡用同一组下标</em>，各存各的 head。',
+   act(){ allocD();
+     S.addr=`<span class="c"># Decode 侧（4 张卡一起调度）</span>
+alloc → dst_kv_indices = <span class="y">[1, 3, 4]</span>
+
+虚线格 = 已分配、还没收到数据`;
+     S.focus=['pD']; } },
+
+ { title:'握手：rank 怎么对应', code:'common/conn.py:938  _resolve_rank_mapping', dur:9500,
+   cap:'D 的 TP 是 P 的 2 倍，所以 D 的 rank r 去找 P 的 <em>r // 2</em>：D0、D1 找 P0，D2、D3 找 P1。',
+   act(){ S.hs.map=true; S.arrows=links();
+     S.addr=`<span class="c"># D_tp(4) > P_tp(2) 分支</span>
+target_tp_rank = r // (4 // 2) = <span class="y">r // 2</span>
+required_dst_info_num = 4 // 2 = <span class="y">2</span>
+<span class="c"># 一张 P 卡要服务 2 张 D 卡</span>`;
+     S.focus=['pHS']; } },
+
+ { title:'D 把元数据发给 P', code:'decode.py:1635  send_metadata', dur:8500,
+   cap:'每张 D 卡把<em>自己的 slot 下标</em>和每层 KV 的显存指针，通过 <code>send_metadata</code> 发给对应的 P 卡。',
+   act(){ S.hs.metas=true; S.arrows=links();
+     S.addr=`<span class="c"># 每张 D 卡发出的内容</span>
+dst_kv_indices = [1, 3, 4]
+dst_kv_ptrs    = 每层 K / V 的起始地址
+dst_tp_rank, dst_attn_tp_size = 4
+dst_kv_item_len = 256 B × page_size`;
+     S.focus=['pHS']; } },
+
+ { title:'P 等元数据到齐', code:'mooncake/conn.py:2511  required_dst_info_num', dur:8000,
+   cap:'P0 要等 D0、D1 <em>两份</em>元数据都到齐（<code>required_dst_info_num=2</code>），才会开始发送。',
+   act(){ S.hs.metas=true; S.hs.cnt=true; S.arrows=links(); S.focus=['pHS']; } },
+
+ { title:'Prefill 计算并写入 KV', code:'prefill.py:1299  send_kv_chunk', dur:9000,
+   cap:'P 跑完 prefill，KV 写进<em>它自己的</em> slot <code>[3,0,4]</code>。和 D 的下标不同，传输时要逐个对上。',
+   act(){ fillP('kv');
+     S.addr=`<span class="c"># 同一个 token，两边的 slot 不同</span>
+token   P 的 slot   D 的 slot
+ t0        <span class="y">3</span>           <span class="g">1</span>
+ t1        <span class="y">0</span>           <span class="g">3</span>
+ t2        <span class="y">4</span>           <span class="g">4</span>`;
+     S.focus=['pP','pAddr']; } },
+
+ { title:'选择传输路径', code:'mooncake/conn.py:2169  路径分支', dur:9000,
+   cap:'TP 不同、又不是 MLA，一行不能整块拷贝，走 <code>send_kvcache_slice</code> 按 head 切。',
+   act(){ fillP('kv');
+     S.addr=`<span class="c"># transfer_worker 里的分支</span>
+if   is_dcp_transfer:        send_kvcache_dcp
+elif is_mla or P_tp == D_tp: send_kvcache      <span class="c"># 整行</span>
+elif staging 开启:           _do_staging_transfer
+<span class="on">else:                        send_kvcache_slice</span> <span class="y">← 本例</span>`;
+     S.focus=['pAddr']; } },
+
+ { title:'算切片：从第几个 head 开始', code:'mooncake/conn.py:1241  send_kvcache_slice', dur:10000,
+   cap:'以 P0 → D1 为例：D1 负责 h1，在 P0 每行里<em>从第 1 个 head 开始</em>，取 1 个 head。',
+   act(){ fillP('kv'); allocD(); S.hl=PS.map(s=>`p0-s${s}-c1`); S.hlCards=['dc1'];
+     S.addr=`<span class="c"># P0 → D1</span>
+src_heads_per_rank = 4 // 2 = 2
+dst_heads_per_rank = 4 // 4 = 1
+dst_replication     = max(1, 4 // 4) = 1
+unique_dst_head_idx = 1 // 1 = 1
+src_head_start = (1 × 1) % 2 = <span class="y">1</span>   → h1
+num_heads_to_send = <span class="y">1</span>`;
+     S.focus=['pAddr','pP']; } },
+
+ { title:'算地址：每个 token 一个三元组', code:'mooncake/conn.py:1359  process_layer_tp_aware', dur:10500,
+   cap:'源地址 = 层指针 + slot × 512 + 256（跳过 h0），目的地址 = 层指针 + slot × 256，长度 <em>256 B</em>。',
+   act(){ fillP('kv'); allocD(); S.hl=PS.map(s=>`p0-s${s}-c1`); S.hlCards=['dc1'];
+     S.addr=`<span class="c"># 每层 K 一组，V 再来一组</span>
+       源 (P0)            目的 (D1)        长度
+t0: K + <span class="y">3</span>×512 + 256  →  K + <span class="g">1</span>×256   256 B
+t1: K + <span class="y">0</span>×512 + 256  →  K + <span class="g">3</span>×256   256 B
+t2: K + <span class="y">4</span>×512 + 256  →  K + <span class="g">4</span>×256   256 B
+<span class="c"># 打包成列表交给传输引擎</span>`;
+     S.focus=['pAddr']; } },
+
+ { title:'P0 发送：RDMA 直接写入', code:'mooncake/conn.py:718  _transfer_data', dur:9000,
+   cap:'P0 用 RDMA 把 h0 写到 D0、h1 写到 D1，<em>直接写进 D 预分配好的 slot</em>，D 的 GPU 不用参与。',
+   act(){ fillP('kv'); allocD(); recvD(0); recvD(1);
+     S.arrows=[...dataArrows(0,0,0), ...dataArrows(0,1,1)];
+     S.addr=`P0 → D0：src_head_start = <span class="y">0</span>  (h0)
+P0 → D1：src_head_start = <span class="y">1</span>  (h1)
+<span class="c"># 两组都在 P0 上，由传输线程并发提交</span>`;
+     S.focus=['pP','pD']; } },
+
+ { title:'P1 发送', code:'mooncake/conn.py:718  _transfer_data', dur:8500,
+   cap:'P1 同时把 h2 写到 D2、h3 写到 D3。4 张 D 卡各自拿到<em>自己负责的 head</em>，可以开始 decode。',
+   act(){ fillP('kv'); allocD(); [0,1,2,3].forEach(recvD);
+     S.arrows=[...dataArrows(0,0,0,'dim'), ...dataArrows(0,1,1,'dim'), ...dataArrows(1,0,2), ...dataArrows(1,1,3)];
+     S.addr=`P0 → D0：h0    P0 → D1：h1
+P1 → D2：<span class="y">h2</span>    P1 → D3：<span class="y">h3</span>
+<span class="c"># 每张 P 卡发 2 份、每张 D 卡收 1 份</span>`;
+     S.focus=['pP','pD']; } },
+
+ { title:'代价：很多小块传输', code:'mooncake/conn.py:1257  docstring NOTE', dur:10000,
+   cap:'每个 token、每层、K 和 V 各发一次 <em>256 B 小块</em>。代码注释提醒：长序列会因此拉高 TTFT。',
+   act(){ fillP('kv'); [0,1,2,3].forEach(recvD);
+     S.arrows=[...dataArrows(0,0,0,'dim'), ...dataArrows(0,1,1,'dim'), ...dataArrows(1,0,2,'dim'), ...dataArrows(1,1,3,'dim')];
+     S.addr=`<span class="c"># 每对 (P rank, D rank) 的传输次数</span>
+= token 数 × 层数 × 2 (K, V)
+本例：3 × 1 × 2 = 6 次，每次 256 B
+8K token × 60 层：≈ <span class="r">98 万次</span> 256 B 小块
+
+<span class="c"># TP 相同时走 send_kvcache，按页整块拷贝</span>
+<span class="c"># 所以不同 TP 会打印 "Performance is NOT guaranteed"</span>`;
+     S.focus=['pAddr']; } },
+
+ { title:'边界：head 不够分', code:'mooncake/conn.py:1296  dst_replication', dur:11500,
+   cap:'只有 2 个 KV head、D TP=4 时，D0、D1 都存 h0。要按 <em>r // 2</em> 找 head，用取模的话 D1 会取到 h1。',
+   act(){
+     S.cfg={heads:2,pTP:1,dTP:4,mla:false};
+     S.pHeads=[[0,1],[]]; S.pUnused=[false,true]; S.dHeads=[[0],[0],[1],[1]];
+     S.pc=[grid(2),grid(0)]; S.dc=[grid(1),grid(1),grid(1),grid(1)];
+     S.hs={map:true, metas:false, cnt:false, reverse:false};
+     fillP('kv'); [0,1,2,3].forEach(recvD);
+     S.arrows=[...dataArrows(0,0,0), ...dataArrows(0,0,1), ...dataArrows(0,1,2), ...dataArrows(0,1,3),
+               {from:`p0-s${PS[0]}-c1`, fromCard:'pc0', to:`d1-s${DS[0]}`, toCard:'dc1', color:'#ef4444', kind:'bad', label:'取模 ✗'}];
+     S.addr=`<span class="c"># 本例改为 P TP=1，2 个 KV head</span>
+dst_replication = max(1, 4 // 2) = <span class="y">2</span>
+D1：unique_dst_head_idx = 1 // 2 = 0
+    src_head_start = (0 × 1) % 2 = <span class="g">0 → h0 ✓</span>
+若用取模：1 % 2 = 1 → <span class="r">h1 ✗</span>`;
+     S.focus=['pAddr','pD']; } },
+
+ { title:'对比 MLA：没有 head 维度', code:'memory_pool.py:4387  kv_cache_dim', dur:10000,
+   cap:'换成 MLA：KV 被压成一个 latent 向量，<em>没有 head 维度</em>，每张卡都存一份完整的。',
+   act(){
+     S.cfg={heads:'latent',pTP:2,dTP:4,mla:true};
+     S.pHeads=[['L'],['L']]; S.pUnused=[false,false]; S.dHeads=[['L'],['L'],['L'],['L']];
+     S.pc=[grid(1),grid(1)]; S.dc=[grid(1),grid(1),grid(1),grid(1)];
+     S.pBy='每行 1152 B'; S.dBy='每行<br>1152 B';
+     S.hs={map:true, metas:false, cnt:false, reverse:false};
+     fillP('kv'); allocD(); S.arrows=links();
+     S.addr=`<span class="c"># MLA (DeepSeek 系)</span>
+kv_cache_dim = kv_lora_rank + qk_rope_head_dim
+             = 512 + 64 = <span class="y">576</span>   → 1152 B (bf16)
+没有 head 维度，TP 不切 KV
+<span class="y">P0、P1 存的内容完全相同</span>`;
+     S.focus=['pP','pD','pAddr']; } },
+
+ { title:'MLA：整行拷贝', code:'mooncake/conn.py:2174  send_kvcache', dur:9500,
+   cap:'MLA 直接走 <code>send_kvcache</code>：还是按 r // 2 找 P 卡，但<em>整行拷贝</em>，不用算 head 偏移。',
+   act(){ fillP('kv'); [0,1,2,3].forEach(recvD);
+     S.arrows=[...dataArrows(0,0,0), ...dataArrows(0,0,1), ...dataArrows(1,0,2), ...dataArrows(1,0,3)];
+     S.addr=`<span class="c"># is_mla_backend → send_kvcache</span>
+src = K + slot_P × 1152
+dst = K + slot_D × 1152
+len = <span class="y">整行 1152 B</span>
+<span class="c"># 不需要 src_head_start / num_heads_to_send</span>`;
+     S.focus=['pP','pD']; } },
+
+ { title:'反过来：P TP > D TP', code:'common/conn.py:977  is_mla_backend', dur:11000,
+   cap:'若 P TP=4、D TP=2，D0 要连 P0、P1。MLA 只从 <em>P0</em> 取真数据，P1 只收一个 dummy 请求。',
+   act(){ fillP('kv'); [0,1,2,3].forEach(recvD);
+     S.hs.reverse=true;
+     S.addr=`<span class="c"># D_tp(2) < P_tp(4) 分支</span>
+target_tp_ranks = [2r, 2r + 1]
+MLA：required_prefill_response_num = <span class="y">1</span>
+     <span class="c"># 每张 P 卡内容相同，取一份就够</span>
+GQA：required_prefill_response_num = <span class="y">2</span>
+     <span class="c"># 两张 P 卡各发自己那部分 head</span>`;
+     S.focus=['pHS','pAddr']; } },
+
+ { title:'', code:'', dur:13000,
+   cap:'沿着这 5 个位置打断点，用同一个 bootstrap_room 把 P、D 两边的日志串起来看。',
+   act(){ S.overlay='summary'; } },
+];
+
+/* ---------------- render ---------------- */
+const $ = id => document.getElementById(id);
+const hname = h => h==='L' ? 'latent' : 'h'+h;
+
+function pcardHTML(r){
+  const heads=S.pHeads[r], unused=S.pUnused[r];
+  const chips = unused ? '<span class="by" style="margin-left:0">本例 P TP=1，未使用</span>'
+                       : heads.map(h=>`<span class="hchip" style="--c:${HC[h]}">${hname(h)}</span>`).join('');
+  const cols = `22px repeat(${Math.max(1,heads.length)}, 1fr)`;
+  let g = `<div class="pgrid" style="grid-template-columns:${cols}"><span></span>`;
+  g += (heads.length?heads:['']).map(h=>`<span class="hd" style="--c:${HC[h]||'#64748b'}">${h===''?'':hname(h)}</span>`).join('');
+  for(let s=0;s<NS;s++){
+    g += `<span class="sl">${s}</span>`;
+    (heads.length?heads:['']).forEach((h,j)=>{
+      const v = S.pc[r][s] && S.pc[r][s][j];
+      const id = `p${r}-s${s}-c${j}`;
+      g += `<div class="cell${v?' '+v.st:''}${S.hl.includes(id)?' hl':''}" id="${id}" style="--c:${HC[h]||'#64748b'}">${v?v.tok:''}</div>`;
+    });
+  }
+  g += '</div>';
+  return `<div class="card pcard${unused?' unused':''}${S.hlCards.includes('pc'+r)?' hl':''}" id="pc${r}">
+    <div class="ctitle">P${r} ${chips}<span class="by">${unused?'':S.pBy}</span></div>${g}</div>`;
+}
+function dcardHTML(r){
+  const h=S.dHeads[r][0];
+  let g='<div class="dgrid">';
+  for(let s=0;s<NS;s++){
+    const v=S.dc[r][s][0]; const id=`d${r}-s${s}`;
+    g += `<span class="sl">${s}</span><div class="cell${v?' '+v.st:''}${S.hl.includes(id)?' hl':''}" id="${id}" style="--c:${HC[h]}">${v?v.tok:''}</div>`;
+  }
+  g+='</div>';
+  return `<div class="card dcard${S.hlCards.includes('dc'+r)?' hl':''}" id="dc${r}">
+    <div class="dside"><div class="nm">D${r}</div><span class="hchip" style="--c:${HC[h]};align-self:flex-start">${hname(h)}</span>
+    <div class="by">${S.dBy}</div></div>${g}</div>`;
+}
+function hsHTML(){
+  const hs=S.hs;
+  if(hs.reverse){
+    return `<div style="font-size:12.5px;color:var(--dim);margin-bottom:6px">假设反过来：P TP=4 → D TP=2（MLA）</div>
+      <div class="rev">
+        <div class="box">P0</div><div class="lab">── 真数据 ──▶</div><div class="box">D0</div>
+        <div class="box dummy">P1</div><div class="lab">┄┄ dummy ┄┄▶</div><div class="lab">D0（只为让 KVPoll 正常结束）</div>
+        <div class="box">P2</div><div class="lab">── 真数据 ──▶</div><div class="box">D1</div>
+        <div class="box dummy">P3</div><div class="lab">┄┄ dummy ┄┄▶</div><div class="lab">D1</div>
+      </div>`;
+  }
+  if(!hs.map) return '<div class="ph">等待请求到达……</div>';
+  let h='';
+  for(let d=0;d<4;d++){
+    h += `<div class="maprow"><span class="tag">D${d}</span><span class="ar">→</span><span class="tag">P${target(d)}</span>`+
+         `<span class="ar mono" style="font-size:11px">${d} // ${S.cfg.dTP/S.cfg.pTP}</span>`+
+         (hs.metas?`<span class="meta">slots [1,3,4] · kv_ptrs ✓</span>`:'')+`</div>`;
+  }
+  if(hs.cnt) h += `<div class="cnt"><div class="ok">P0 收到 2/2 ✓ 开始发送</div><div class="ok">P1 收到 2/2 ✓ 开始发送</div></div>`;
+  return h;
+}
+function cfgHTML(){
+  const c=S.cfg;
+  return `<span>模型：<b>${c.mla?'MLA（latent 576 维）':'GQA，'+c.heads+' 个 KV head'}</b></span><span class="sep">|</span>`+
+    (c.mla?'':`<span>head_dim <b>128</b> · bf16</span><span class="sep">|</span>`)+
+    `<span>Prefill <b>TP=${c.pTP}</b></span><span class="sep">|</span><span>Decode <b>TP=${c.dTP}</b></span>`+
+    `<span class="sep">|</span><span>page_size <b>1</b> · 只画 1 层的 K</span>`;
+}
+
+/* ---- arrows ---- */
+const stage=$('stage');
+function rel(el){
+  const st=stage.getBoundingClientRect(), r=el.getBoundingClientRect(), k=st.width/1280;
+  return {l:(r.left-st.left)/k, r:(r.right-st.left)/k, t:(r.top-st.top)/k, b:(r.bottom-st.top)/k,
+          cy:((r.top+r.bottom)/2-st.top)/k};
+}
+const markers=new Set();
+function marker(color){
+  const id='m'+color.slice(1);
+  if(!markers.has(id)){
+    markers.add(id);
+    $('adefs').insertAdjacentHTML('beforeend',
+      `<marker id="${id}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+       <path d="M0,0 L10,5 L0,10 z" fill="${color}"/></marker>`);
+  }
+  return id;
+}
+function drawArrows(){
+  let h='';
+  S.arrows.forEach(a=>{
+    let x1,y1,x2,y2;
+    if(a.kind==='link'){
+      const p=rel($(a.fromCard)), d=rel($(a.toCard));
+      x1=p.r; y1=(p.t+p.b)/2; x2=d.l; y2=(d.t+d.b)/2;
+    } else {
+      const c=rel($(a.fromCard)), f=rel($(a.from)), t=rel($(a.to));
+      x1=c.r; y1=f.cy; x2=rel($(a.toCard)).l; y2=t.cy;
+    }
+    const dx=(x2-x1)*.45;
+    const d=`M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2-2},${y2}`;
+    const cls = a.kind==='bad' ? 'flow' : a.kind;
+    const w = a.kind==='link' ? 1.6 : 2;
+    h += `<path d="${d}" fill="none" stroke="${a.color}" stroke-width="${w}" class="${cls}" marker-end="url(#${marker(a.color)})"/>`;
+    if(a.label) h += `<text x="${(x1+x2)/2}" y="${(y1+y2)/2-8}" fill="${a.color}" font-size="13" font-weight="700" text-anchor="middle">${a.label}</text>`;
+  });
+  $('ag').innerHTML=h;
+}
+
+function render(i){
+  const st=steps[i];
+  $('stitle').innerHTML = st.title ? `<span class="no">${String(i).padStart(2,'0')}</span>${st.title}` : '';
+  $('code').textContent = st.code;
+  $('cap').innerHTML = `<span>${st.cap}</span>`;
+  $('cfg').innerHTML = cfgHTML();
+  $('pcards').innerHTML = [0,1].map(pcardHTML).join('');
+  $('dcards').innerHTML = [0,1,2,3].map(dcardHTML).join('');
+  $('hs').innerHTML = hsHTML();
+  const a=$('addr'); a.innerHTML = S.addr || '<span class="ph">传输开始后，这里显示地址怎么算。</span>';
+  a.style.animation='none'; void a.offsetWidth; a.style.animation='';
+  ['pP','pD','pHS','pAddr'].forEach(id=>$(id).classList.toggle('focus', S.focus.includes(id)));
+  drawArrows();
+
+  const ov=$('ov');
+  if(S.overlay==='title'){
+    ov.innerHTML = `<h1>PD 传输：KV 按 head 切分</h1><h2>SGLang KV Cache 系列 06 · P TP=2 → D TP=4 · 约 3 分钟</h2>`+
+      (started ? '' : `<button class="big" onclick="play()">▶ 开始演示</button>`);
+    ov.classList.remove('hide');
+  } else if(S.overlay==='summary'){
+    ov.innerHTML = `<h1 style="font-size:40px">一句话记住</h1>
+      <div class="sum">TP 相同 <b>整行搬</b> · TP 不同 <b>按 head 切</b> · MLA 没有 head <b>整行搬</b>（P 卡多时只取一份）<br>
+      D 先分配 slot，P 按 <b>r // 倍数</b> 找到对方，RDMA 直接写进对端 slot</div>
+      <div class="path">
+        1. common/conn.py:938 &nbsp;&nbsp;&nbsp;&nbsp;_resolve_rank_mapping &nbsp;&nbsp;rank 怎么对应<br>
+        2. mooncake/conn.py:2169 &nbsp;路径分支 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;走哪条路<br>
+        3. mooncake/conn.py:1241 &nbsp;send_kvcache_slice &nbsp;&nbsp;&nbsp;&nbsp;切哪几个 head<br>
+        4. mooncake/conn.py:1359 &nbsp;process_layer_tp_aware 算出的地址<br>
+        5. mooncake/conn.py:718 &nbsp;&nbsp;_transfer_data &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;实际提交 RDMA
+      </div>`;
+    ov.classList.remove('hide');
+  } else ov.classList.add('hide');
+}
+
+/* ---------------- playback ---------------- */
+let cur=0, playing=false, started=false, timer=null, voice=false;
+const bar=$('bar');
+steps.forEach((s,k)=>{ const d=document.createElement('div'); d.title=s.title||(k?'总结':'概览'); d.onclick=()=>{goto(k); if(playing) schedule();}; bar.appendChild(d); });
+const total = steps.reduce((a,s)=>a+s.dur,0);
+
+function goto(i){
+  cur=Math.max(0,Math.min(steps.length-1,i));
+  init();
+  for(let k=0;k<=cur;k++){ clearTransient(); S.overlay=null; steps[k].act(); }
+  render(cur); updateBar(); speak();
+}
+function updateBar(){
+  [...bar.children].forEach((d,k)=>{
+    d.className = k<cur?'done':(k===cur?'cur':''); d.style.setProperty('--d', steps[k].dur+'ms');
+    if(k===cur && !playing) d.classList.add('paused');
+  });
+  const el = steps.slice(0,cur).reduce((a,s)=>a+s.dur,0)/1000;
+  $('time').textContent = `${fmt(el)} / ${fmt(total/1000)}`;
+  $('bplay').textContent = playing ? '⏸' : '▶';
+}
+function fmt(s){ s=Math.round(s); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+function schedule(){ clearTimeout(timer); timer=setTimeout(advance, steps[cur].dur); }
+function advance(){
+  if(voice && speechSynthesis.speaking){ timer=setTimeout(advance, 300); return; }
+  if(cur>=steps.length-1){ playing=false; updateBar(); return; }
+  goto(cur+1); schedule();
+}
+function play(){ started=true; if(cur===steps.length-1) goto(0);
+  if(cur===0) goto(1); playing=true; updateBar(); schedule(); }
+function pause(){ playing=false; clearTimeout(timer); speechSynthesis.cancel(); updateBar(); }
+function toggle(){ playing?pause():play(); }
+
+function speak(){
+  if(!voice || !('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const txt = steps[cur].cap.replace(/<[^>]+>/g,'').replace(/&[a-z]+;/g,'').replace(/_/g,' ').replace(/\/\//g,'整除');
+  const u = new SpeechSynthesisUtterance(txt); u.lang='zh-CN'; u.rate=1.08;
+  const zh = speechSynthesis.getVoices().find(v=>/zh[-_]CN/i.test(v.lang)); if(zh) u.voice=zh;
+  speechSynthesis.speak(u);
+}
+
+$('bplay').onclick=toggle;
+$('bprev').onclick=()=>{ goto(cur-1); if(playing) schedule(); };
+$('bnext').onclick=()=>{ started=true; goto(cur+1); if(playing) schedule(); };
+$('bvoice').onclick=()=>{ voice=!voice; $('bvoice').textContent = voice?'🔊 朗读':'🔇 朗读'; if(voice) speak(); else speechSynthesis.cancel(); };
+document.addEventListener('keydown',e=>{
+  if(e.code==='Space'){ e.preventDefault(); toggle(); }
+  else if(e.code==='ArrowRight') $('bnext').onclick();
+  else if(e.code==='ArrowLeft') $('bprev').onclick();
+});
+
+function fit(){ const s=Math.min(innerWidth/1300, innerHeight/800); $('wrap').style.transform=`translate(-50%,-50%) scale(${s})`; drawArrows(); }
+addEventListener('resize', fit);
+goto(0); fit();
+</script>
+</body>
+</html>

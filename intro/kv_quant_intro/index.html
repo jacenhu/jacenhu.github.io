@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>KV 量化 · SGLang KV Cache 系列 12</title>
+<style>
+  :root{--bg:#0b1020;--panel:#121a2e;--line:#26314d;--text:#e6ebf5;--dim:#8a96b3;--gold:#facc15;--red:#ef4444;
+        --A:#4f8cff;--B:#22c55e;--L:#a78bfa}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:#05070f;color:var(--text);
+    font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;overflow:hidden}
+  #wrap{position:absolute;left:50%;top:50%;width:1280px;height:780px;transform-origin:center center}
+  #stage{position:relative;width:1280px;height:720px;background:var(--bg);border-radius:14px;overflow:hidden;
+    box-shadow:0 20px 60px rgba(0,0,0,.6)}
+  code,.mono{font-family:Menlo,Consolas,monospace}
+  /* top bar */
+  #top{position:absolute;left:24px;right:24px;top:16px;height:44px;display:flex;align-items:center;justify-content:space-between}
+  #stitle{font-size:24px;font-weight:700;letter-spacing:.5px}
+  #stitle .no{color:var(--dim);font-weight:500;margin-right:10px;font-size:18px}
+  #code{font-family:Menlo,Consolas,monospace;font-size:14px;color:#c7d2fe;background:#1e2a4a;border:1px solid #334373;
+    padding:6px 12px;border-radius:8px;transition:opacity .3s}
+  #code:empty{opacity:0}
+  /* panels */
+  .panel{position:absolute;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;
+    transition:box-shadow .3s,border-color .3s}
+  .panel h3{margin:0 0 6px;font-size:15px;display:flex;justify-content:space-between;align-items:baseline}
+  .panel h3 small{font-size:11.5px;color:var(--dim);font-weight:400}
+  .focus{border-color:#7aa2ff!important;box-shadow:0 0 0 2px rgba(122,162,255,.35),0 0 28px rgba(122,162,255,.25)}
+  /* ledger */
+  #led{font-family:Menlo,Consolas,monospace;font-size:12.3px;line-height:1.6;white-space:pre;color:#dbe4ff;animation:fadein .45s ease-out}
+  #led .c{color:var(--dim)}
+  #led .y{color:var(--gold)}
+  #led .g{color:#86efac}
+  #led .r{color:#fca5a5}
+  .ph{font-size:12.5px;color:var(--dim);font-style:italic}
+  /* table */
+  table{width:100%;border-collapse:collapse;font-size:11.5px}
+  #pTab h3{margin-bottom:3px}
+  th{font-weight:500;color:var(--dim);text-align:right;padding:1px 5px 3px;border-bottom:1px solid #2a3656;white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  td{text-align:right;padding:1px 5px;line-height:1.2;font-family:Menlo,monospace;font-size:11px;border-bottom:1px solid #1a2340;white-space:nowrap;animation:fadein .4s ease-out}
+  td:first-child{font-family:inherit;font-size:11.5px}
+  tr.cur td{background:rgba(250,204,21,.1);color:#fff}
+  tr.cur td:first-child{box-shadow:inset 3px 0 0 var(--gold)}
+  .bad{color:#fca5a5}.good{color:#86efac}
+  /* caption */
+  #cap{position:absolute;left:24px;right:24px;top:602px;height:104px;display:flex;align-items:center;justify-content:center;
+    text-align:center;font-size:20px;line-height:1.55;padding:0 30px;background:linear-gradient(180deg,rgba(18,26,46,.9),rgba(18,26,46,.6));
+    border:1px solid var(--line);border-radius:12px}
+  #cap span{animation:fadein .5s ease-out}
+  #cap em{font-style:normal;color:var(--gold)}
+  #cap code{font-size:17px;color:#c7d2fe}
+  @keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  /* overlay */
+  #ov{position:absolute;inset:0;background:radial-gradient(ellipse at center,#16224a 0%,#0b1020 70%);display:flex;flex-direction:column;
+    align-items:center;justify-content:center;transition:opacity .6s;z-index:10}
+  #ov.hide{opacity:0;pointer-events:none}
+  #ov h1{font-size:50px;margin:0 0 14px;letter-spacing:2px}
+  #ov h2{font-size:22px;font-weight:400;color:var(--dim);margin:0 0 34px}
+  #ov .big{font-size:18px;padding:12px 30px;border-radius:30px;background:#4f8cff;color:#fff;border:none;cursor:pointer}
+  #ov .sum{font-size:20px;line-height:1.9;text-align:left}
+  #ov .sum b{color:var(--gold)}
+  #ov .path{margin-top:22px;font-family:Menlo,monospace;font-size:15px;color:#c7d2fe;background:#121a2e;border:1px solid var(--line);
+    padding:14px 22px;border-radius:10px;line-height:1.9;white-space:pre}
+  /* controls */
+  #ctrl{position:absolute;left:0;right:0;top:732px;height:44px;display:flex;align-items:center;gap:12px;padding:0 6px}
+  #ctrl button{background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;min-width:40px;
+    font-size:15px;cursor:pointer;padding:0 10px}
+  #ctrl button:hover{background:#26325a}
+  #ctrl a.home{display:flex;align-items:center;background:#1b2440;color:var(--text);border:1px solid #2e3a5e;border-radius:8px;height:34px;padding:0 10px;font-size:13px;text-decoration:none;white-space:nowrap}
+  #ctrl a.home:hover{background:#26325a}
+  #bar{flex:1;display:flex;gap:3px;height:10px;cursor:pointer}
+  #bar div{flex:1;background:#232d4b;border-radius:3px;position:relative;overflow:hidden}
+  #bar div.done{background:#4f8cff}
+  #bar div.cur::after{content:'';position:absolute;left:0;top:0;bottom:0;background:#4f8cff;animation:fill var(--d) linear forwards}
+  #bar div.cur.paused::after{animation-play-state:paused}
+  @keyframes fill{from{width:0}to{width:100%}}
+  #time{font-size:13px;color:var(--dim);width:84px;white-space:nowrap;text-align:right}
+  #pB{left:24px;top:70px;width:600px;height:522px}
+  #pCfg{left:636px;top:70px;width:620px;height:136px}
+  #pLed{left:636px;top:214px;width:620px;height:170px}
+  #pTab{left:636px;top:392px;width:620px;height:200px}
+  /* bytes panel */
+  .mline{font-size:13px;color:var(--dim);margin:2px 0 8px}
+  .mline b{color:var(--text)}
+  .sec{font-size:11.5px;color:var(--dim);margin:10px 0 4px;display:flex;justify-content:space-between}
+  .sec b{color:var(--text);font-family:Menlo,monospace;font-weight:600}
+  .brow{display:flex;align-items:center;gap:8px;margin:5px 0;animation:fadein .4s ease-out}
+  .brow .bl{width:58px;font-family:Menlo,monospace;font-size:11px;color:#c7d2fe;text-align:right;flex:none}
+  .bar{display:flex;height:22px;border-radius:4px;overflow:visible}
+  .seg{height:22px;border:1px solid var(--c);background:color-mix(in srgb,var(--c) 50%,transparent);
+    font-family:Menlo,monospace;font-size:10px;color:#fff;display:flex;align-items:center;justify-content:center;
+    white-space:nowrap;overflow:hidden;transition:width .5s}
+  .seg:first-child{border-radius:4px 0 0 4px}.seg:last-child{border-radius:0 4px 4px 0}
+  .brow.ghost .seg{opacity:.35}
+  .brow .bt{font-family:Menlo,monospace;font-size:11px;color:var(--dim);white-space:nowrap}
+  .brow .bt b{color:var(--text)}
+  .legend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:11px;color:var(--dim);margin:4px 0 0 66px}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px;
+    border:1px solid var(--c);background:color-mix(in srgb,var(--c) 50%,transparent)}
+  .bufs{font-family:Menlo,monospace;font-size:11.3px;line-height:1.6;color:#dbe4ff;background:#0e1527;border:1px solid #2a3656;
+    border-radius:8px;padding:6px 10px;white-space:pre;animation:fadein .4s ease-out}
+  .bufs .c{color:var(--dim)}.bufs .y{color:var(--gold)}
+  .flow{display:flex;gap:6px;align-items:stretch;margin-top:8px}
+  .fbox{flex:1;background:#0e1527;border:1px solid #2a3656;border-radius:8px;padding:5px 8px;font-size:11px;line-height:1.45;color:var(--dim);
+    transition:all .4s}
+  .fbox b{display:block;color:var(--text);font-size:12px;margin-bottom:2px}
+  .fbox code{font-size:10.5px;color:#c7d2fe}
+  .fbox.on{border-color:var(--gold);box-shadow:0 0 14px rgba(250,204,21,.3);color:#e6ebf5}
+  .farr{align-self:center;color:var(--dim);font-size:14px}
+  /* config */
+  #cfg{font-size:12.5px;line-height:1.65;white-space:nowrap}
+  #cfg .chips{display:flex;flex-wrap:nowrap;gap:4px;margin:1px 0 5px}
+  #cfg .k{font-family:Menlo,monospace;font-size:10.5px;padding:0 5px;border-radius:6px;border:1px solid #33416a;background:#18223d;color:#8a96b3}
+  #cfg .k.on{border-color:var(--gold);color:var(--gold);background:rgba(250,204,21,.1)}
+  #cfg .k.dep{text-decoration:line-through;color:#5b6684}
+  #cfg .f{font-family:Menlo,monospace;font-size:11.5px;color:#c7d2fe}
+  #cfg .f b{color:var(--gold);font-weight:600}
+  #cfg .g{font-size:12px;color:var(--dim)}
+  #cfg .g.warn{color:#fca5a5}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <div id="top"><div id="stitle"></div><div id="code"></div></div>
+
+    <div class="panel" id="pB"><h3>① 一个 token 的 K/V 占多少字节 <small>按比例画：数据 vs scale</small></h3><div id="bytes"></div></div>
+    <div class="panel" id="pCfg"><h3>② dtype 与准入检查 <small>--kv-cache-dtype → torch dtype → pool</small></h3><div id="cfg"></div></div>
+    <div class="panel" id="pLed"><h3>③ 账本 <small>公式来自源码</small></h3><div id="led"></div></div>
+    <div class="panel" id="pTab"><h3>④ 容量对比 <small>attn TP=1 · 40 GB 给 KV（假设）· 同模型 bf16 = 1×</small></h3><div id="tab"></div></div>
+
+    <div id="cap"></div>
+    <div id="ov"></div>
+  </div>
+
+  <div id="ctrl">
+    <a class="home" href="../index.html" title="返回目录">☰ 目录</a>
+    <button id="bprev" title="上一步 (←)">⏮</button>
+    <button id="bplay" title="自动演示/暂停 (空格)">▶</button>
+    <button id="bnext" title="下一步 (→)">⏭</button>
+    <div id="bar"></div>
+    <div id="time"></div>
+    <button id="bvoice" title="中文语音朗读">🔇 朗读</button>
+  </div>
+</div>
+
+<script>
+const KV_BYTES = 40 * 1024 ** 3;   // 假设每卡留给 KV 的显存
+const C = {K:'#4f8cff', V:'#22c55e', KS:'#facc15', VS:'#f59e0b', WS:'#a78bfa', NOPE:'#a78bfa', ROPE:'#ec4899', SC:'#facc15'};
+const PX = 420 / 4096;             // 4096 B（GQA bf16 一层）画成 420px
+const MODELS = {
+  A:{name:'模型 A · GQA', desc:'<b>8</b> 个 KV head × head_dim <b>128</b> × <b>64</b> 层', L:64},
+  B:{name:'模型 B · MLA', desc:'latent <b>576</b> 维（512 nope + 64 rope）× <b>61</b> 层', L:61},
+};
+/* 每种配置一层一个 token 的字节（来自各 pool 的 buffer 形状）*/
+const DT = {
+  A_bf16:{label:'bf16', segs:[['K',2048,'K'],['V',2048,'V']], ws:0, torch:'torch.bfloat16', store:'bfloat16', pool:'MHATokenToKVPool',
+    bufs:`k_buffer[l]  [m, 8, 128]  bfloat16
+v_buffer[l]  [m, 8, 128]  bfloat16`},
+  A_fp8:{label:'fp8', segs:[['K',1024,'K'],['V',1024,'V']], ws:0, torch:'torch.float8_e4m3fn', store:'uint8', pool:'MHATokenToKVPool',
+    bufs:`k_buffer[l]  [m, 8, 128]  uint8  <span class="c"># 读时 view 成 fp8</span>
+v_buffer[l]  [m, 8, 128]  uint8
+k_scale / v_scale  每层 1 个 float  <span class="c"># 不在 pool 里</span>`},
+  A_mxfp8:{label:'mxfp8', segs:[['K',1024,'K'],['V',1024,'V'],['',32,'KS'],['',32,'VS']], ws:0, torch:'torch.float8_e4m3fn', store:'float8_e4m3fn', pool:'MHATokenToKVPoolMXFP8',
+    bufs:`k/v_buffer[l]  [m, 8, 128]  float8_e4m3fn
+k/v_scale_buffer[l]  每 token 8×(128/32)=32 个
+  float8_e8m0fnu  <span class="c"># page=128 时按 FA4 布局交错</span>`},
+  A_fp4:{label:'nvfp4', segs:[['K',512,'K'],['V',512,'V'],['',64,'KS'],['',64,'VS']], ws:2048, torch:'torch.float4_e2m1fn_x2', store:'uint8', pool:'MHATokenToKVPool + quant_method',
+    bufs:`k/v_buffer[l]        [m, 8, 64]   uint8  <span class="c"># 2 个 fp4/字节</span>
+k/v_scale_buffer[l]  [m, 8, 8]    uint8  <span class="c"># view 成 fp8</span>
+dq_k/dq_v  [m, 8, 128]  fp8  <span class="y"># 全模型共享 1 份</span>
+k_scales_gpu  [64] fp32  <span class="c"># 每层一个全局 scale</span>`},
+  B_bf16:{label:'bf16', segs:[['nope',1024,'NOPE'],['',128,'ROPE']], ws:0, torch:'torch.bfloat16', store:'bfloat16', pool:'MLATokenToKVPool',
+    bufs:`kv_buffer[l]  [m, 1, 576]  bfloat16  <span class="c"># K/V 共用</span>`},
+  B_fp8:{label:'fp8', segs:[['nope',512,'NOPE'],['',64,'ROPE']], ws:0, torch:'torch.float8_e4m3fn', store:'uint8', pool:'MLATokenToKVPool',
+    bufs:`kv_buffer[l]  [m, 1, 576]  uint8`},
+  B_fp4:{label:'fp4', segs:[['',288,'NOPE'],['',36,'SC']], ws:0, torch:'torch.float4_e2m1fn_x2', store:'uint8', pool:'MLATokenToKVPoolFP4',
+    bufs:`kv_buffer[l]        [m, 1, 288]  uint8
+kv_scale_buffer[l]  [m, 36]      uint8  <span class="c"># 576/16</span>`},
+  B_dsa:{label:'DSA fp8', segs:[['',512,'NOPE'],['',16,'SC'],['',128,'ROPE']], ws:0, torch:'torch.float8_e4m3fn', store:'uint8', pool:'MLATokenToKVPool (DSA)',
+    bufs:`kv_buffer[l]  [m, 1, 656]  uint8
+  512 nope fp8 + 16 scale + 64 rope × 2 B (bf16)`},
+};
+const CHOICES = ['auto','fp8_e5m2','fp8_e4m3','mxfp8','bf16','bfloat16','nvfp4','fp4_mx_block16','fp4_e2m1'];
+
+let S;
+function init(){ S = {view:null, rows:[], ledger:'', overlay:null, chip:null, gate:null}; clearTransient(); }
+function clearTransient(){ S.focus=[]; S.curRow=-1; S.phase=null; }
+function view(m, dt, chip, alt){ S.view = {m, dt, alt}; S.chip = chip; }
+function addRow(label, per, cell, rel, cap, note){
+  S.rows.push({label, per, cell, rel, cap, note}); S.curRow = S.rows.length-1;
+}
+
+const steps = [
+ { title:'', code:'', dur:5000,
+   cap:'同一个 token 的 K/V，换成 FP8、MXFP8、FP4 存，<em>每层省下多少字节、多了哪些 scale</em>？',
+   act(){ S.overlay='title'; } },
+
+ { title:'设定：一个 token 的 K/V', code:'pool_configurator.py:415  _compute_cell_size', dur:10000,
+   cap:'GQA 模型 A：8 个 KV head、head_dim 128、64 层。bf16 下一个 token 每层 <em>4096 B</em>，共 <em>256 KB</em>。',
+   act(){ view('A','bf16','auto'); S.phase='alloc';
+     S.ledger=`<span class="c"># _compute_cell_size，非 MLA 分支</span>
+kv_size = torch._utils._element_size(dtype)  <span class="c"># bf16 → 2</span>
+cell = n × (head_dim + v_head_dim) × 层数 × kv_size
+     = 8 × (128 + 128) × 64 × 2
+     = <span class="y">262,144 B</span> / token
+40 GB // 262,144 = <span class="y">16.4 万</span> token`;
+     addRow('GQA · bf16','4,096','262,144','1.00×','16.4 万');
+     S.focus=['pB','pLed','pTab']; } },
+
+ { title:'入口：--kv-cache-dtype', code:'arg_groups/fields/model.py:196  kv_cache_dtype', dur:10000,
+   cap:'是否量化只看一个参数 <em>--kv-cache-dtype</em>：auto、fp8_e4m3 / e5m2、mxfp8、bf16、nvfp4、fp4_mx_block16。',
+   act(){ view('A','bf16',null);
+     S.ledger=`<span class="c"># 三类格式</span>
+fp8_e4m3 / fp8_e5m2   每元素 1 B，每层一个 scale
+mxfp8                 fp8 + 每 32 个元素一个 scale
+nvfp4 / fp4_mx_block16  4 bit + 每 16 个元素一个 scale
+<span class="c"># fp4_e2m1 已废弃，传入直接报错</span>`;
+     S.focus=['pCfg','pLed']; } },
+
+ { title:'解析成 torch dtype', code:'kv_cache_dtype.py:23  configure_kv_cache_dtype', dur:10500,
+   cap:'auto 时看 checkpoint：<em>kv_cache_quant_algo 为 FP8</em> 就用 e4m3，否则跟随模型 dtype。这里选 <em>fp8_e4m3</em>。',
+   act(){ view('A','bf16','fp8_e4m3');
+     S.ledger=`<span class="c"># configure_kv_cache_dtype</span>
+auto      → ckpt FP8 ? float8_e4m3fn : model_dtype
+fp8_e4m3  → torch.float8_e4m3fn     <span class="c"># HIP 用 fnuz</span>
+fp8_e5m2  → torch.float8_e5m2
+mxfp8     → torch.float8_e4m3fn     <span class="c"># :61</span>
+nvfp4 / fp4_mx_block16 → float4_e2m1fn_x2  <span class="c"># :70</span>`;
+     S.focus=['pCfg','pLed']; } },
+
+ { title:'FP8 分配：存成 uint8', code:'memory_pool.py:1839  KVCache.__init__', dur:11000,
+   cap:'fp8 的 <em>index_put 未实现</em>，pool 用 <em>uint8</em> 存：形状仍是 [m, 8, 128]，每层每 token 降到 <em>2048 B</em>。',
+   act(){ view('A','fp8','fp8_e4m3'); S.phase='alloc';
+     S.ledger=`<span class="c"># KVCache.__init__</span>
+dtype in (float8_e5m2, e4m3fn, e4m3fnuz)
+  → store_dtype = torch.uint8   <span class="c"># 同样 1 字节</span>
+<span class="c"># _create_buffers_normal (memory_pool.py:2256)</span>
+cell = 8 × 256 × 64 × <span class="y">1</span> = <span class="y">131,072 B</span>
+40 GB // 131,072 = <span class="y">32.8 万</span>  <span class="g">2.00×</span>`;
+     addRow('GQA · fp8_e4m3','2,048','131,072','2.00×','32.8 万','good');
+     S.focus=['pB','pLed','pTab']; } },
+
+ { title:'scale：每层一个 float', code:'layers/quantization/kv_cache.py:51  process_weights_after_loading', dur:10000,
+   cap:'每个 attention 层只有<em>一个 k_scale、一个 v_scale</em>（per-tensor），从 checkpoint 读入，不占 KV pool。',
+   act(){ view('A','fp8','fp8_e4m3');
+     S.ledger=`<span class="c"># create_weights (kv_cache.py:32)</span>
+layer.k_scale = Parameter(tensor(-1.0))  <span class="c"># 无效占位</span>
+<span class="c"># 加载权重时被 checkpoint 覆盖，之后：</span>
+layer.k_scale_float = k_scale   <span class="c"># python float</span>
+<span class="c"># 不是标量 → ValueError (kv_cache.py:77)</span>
+<span class="c"># 只支持 per-tensor scale</span>`;
+     S.focus=['pB','pLed']; } },
+
+ { title:'写入：除 scale 再 cast', code:'memory_pool.py:2564  set_kv_buffer', dur:11000,
+   cap:'backend 写 KV 时带上 layer.k_scale：<em>k ÷ k_scale → fp8 → view uint8</em>，再按 loc 写进槽位。',
+   act(){ view('A','fp8','fp8_e4m3'); S.phase='write';
+     S.ledger=`<span class="c"># flashattention_backend.py:1330 调用</span>
+set_kv_buffer(layer, loc, k, v, layer.k_scale, ...)
+<span class="c"># MHATokenToKVPool.set_kv_buffer</span>
+cache_k.div_(k_scale)
+cache_k = cache_k.to(self.dtype)          <span class="c"># → fp8</span>
+cache_k = cache_k.view(self.store_dtype)  <span class="c"># → uint8</span>`;
+     S.focus=['pB','pLed']; } },
+
+ { title:'读出：kernel 里反量化', code:'flashattention_backend.py:1260  prepare_paged_mha_query', dur:11000,
+   cap:'读时 pool 只把 uint8 <em>view 回 fp8</em>，不复制；乘回 scale 由 attention kernel 的 <em>k_descale</em> 完成。',
+   act(){ view('A','fp8','fp8_e4m3'); S.phase='read';
+     S.ledger=`<span class="c"># _get_key_buffer (memory_pool.py:2485)</span>
+return k_buffer[l].view(self.dtype)   <span class="c"># 零拷贝</span>
+<span class="c"># 各 backend 把 scale 交给 kernel</span>
+FA3        k_descale = layer.k_scale.expand(bs, H)
+FlashInfer k_scale=layer.k_scale_float  <span class="c"># :1371</span>
+Triton     k_descale = layer.k_scale_float  <span class="c"># :1698</span>`;
+     S.focus=['pB','pLed']; } },
+
+ { title:'MXFP8：每 32 个数一个 scale', code:'memory_pool.py:3409  MHATokenToKVPoolMXFP8', dur:11000,
+   cap:'mxfp8 换用专用 pool：数据仍是 fp8，另存<em>每 32 个元素一个 UE8M0 scale</em>，每层多 64 B，容量 <em>1.94×</em>。',
+   act(){ view('A','mxfp8','mxfp8'); S.phase='alloc';
+     S.ledger=`MXFP8_SCALE_BLOCK_SIZE = 32   <span class="c"># :3416</span>
+scale 每层每 token = 8 × (128+128) / 32 = <span class="y">64 B</span>
+<span class="c"># pool_configurator.py:432</span>
+cell = 131,072 + (8 × 256 × 64) // 32
+     = 131,072 + 4,096 = <span class="y">135,168 B</span>
+40 GB // 135,168 = <span class="y">31.8 万</span>  <span class="g">1.94×</span>`;
+     addRow('GQA · mxfp8','2,112','135,168','1.94×','31.8 万','good');
+     S.focus=['pB','pLed','pTab']; } },
+
+ { title:'FP4：两个数挤一个字节', code:'kv_cache_dtype.py:70  configure_kv_cache_dtype', dur:10500,
+   cap:'nvfp4 和 fp4_mx_block16 都解析成 <em>float4_e2m1fn_x2</em>：一个字节装 2 个 4 bit 数，element_size 仍是 <em>1</em>。',
+   act(){ view('A','fp4','nvfp4');
+     S.ledger=`torch._utils._element_size(float4_e2m1fn_x2) = <span class="y">1</span>
+<span class="c"># _x2：1 字节 = 2 个 e2m1，所以公式里要再 //2</span>
+nvfp4           全局 fp32 + 每 16 个一个 fp8 scale
+fp4_mx_block16  只有每 16 个一个 scale
+<span class="c"># 两种都打 warning：might lead to an accuracy drop</span>`;
+     S.focus=['pCfg','pLed']; } },
+
+ { title:'FP4 的 buffer 由 quant_method 建', code:'fp4_kv_cache_quant_method.py:485  create_buffers', dur:10500,
+   cap:'FP4 仍是 <em>MHATokenToKVPool</em>，buffer 交给 quant_method 建：数据 [m, 8, 64]，<em>每 16 个数一个 scale</em>。',
+   act(){ view('A','fp4','nvfp4'); S.phase='alloc';
+     S.ledger=`<span class="c"># kv_cache_configurator.py:388</span>
+_build_mha_quant_method → NVFP4KVCacheMethod
+<span class="c"># memory_pool.py:2130 _create_buffers</span>
+is_quantized_kv_cache → _create_quantized_buffers
+  → quant_method.create_buffers(m, 8, 128, 64)
+<span class="c"># MHATokenToKVPoolFP4 的 builder (:2044) 无调用方</span>`;
+     S.focus=['pB','pLed']; } },
+
+ { title:'FP4 写入与读出', code:'memory_pool.py:2667  _set_quantized_kv_buffer', dur:11000,
+   cap:'写入时 quant_method 把 bf16 量化成 <em>fp4 + 块 scale</em>；nvfp4 prefill 先解到 <em>fp8 workspace</em>，decode 直接读 fp4。',
+   act(){ view('A','fp4','nvfp4'); S.phase='write';
+     S.ledger=`<span class="c"># 写：quant_method.quantize_and_store</span>
+quantize(k) → k_buffer[loc]=fp4, k_scale_buffer[loc]=sf
+<span class="c"># 读：按 backend 注册的访问方式（:830）</span>
+nvfp4: prefill flashinfer 解到 fp8 workspace，
+       decode trtllm_mha 原生读 fp4
+fp4_mx_block16: _get_key_buffer 解成 bf16 (:2479)`;
+     S.focus=['pB','pLed']; } },
+
+ { title:'FP4 的容量', code:'pool_configurator.py:423  _compute_cell_size', dur:11000,
+   cap:'数据只剩 1/4，但 scale 和共享 workspace 另算：<em>75,776 B / token</em>，是 bf16 容量的 <em>3.46 倍</em>，不是 4 倍。',
+   act(){ view('A','fp4','nvfp4'); S.phase='cap';
+     S.ledger=`cell  = 8 × 256 × 64 × 1 // 2          = 65,536
+     + (8 × 128 × 64 × 2 × 1) // 16      =  8,192
+     + 8 × 128 × 2 × 1  <span class="c"># 共享 workspace</span>  =  2,048
+     = <span class="y">75,776 B</span>   40 GB → <span class="y">56.7 万</span>  <span class="g">3.46×</span>
+<span class="c"># fp4_mx_block16 不分配 workspace，预算照样扣</span>`;
+     addRow('GQA · nvfp4','1,152 + ws','75,776','3.46×','56.7 万','good');
+     S.focus=['pB','pLed','pTab']; } },
+
+ { title:'换成 MLA：一个 latent', code:'memory_pool.py:4343  MLATokenToKVPool', dur:10500,
+   cap:'MLA 模型 B 每层每 token 只存 <em>576 维 latent</em>，K/V 共用：bf16 70,272 B，fp8 减半到 <em>35,136 B</em>。',
+   act(){ view('B','fp8','fp8_e4m3'); S.phase='alloc';
+     S.ledger=`<span class="c"># MLA 分支 (pool_configurator.py:343)</span>
+cell = calculate_mla_kv_cache_dim × 层数 × kv_size
+kv_cache_dim = kv_lora_rank + qk_rope = 512 + 64 = 576
+bf16: 576 × 61 × 2 = <span class="y">70,272 B</span>   → 61.1 万
+fp8 : 576 × 61 × 1 = <span class="y">35,136 B</span>   → 122.2 万`;
+     addRow('MLA · bf16','1,152','70,272','1.00×','61.1 万');
+     addRow('MLA · fp8_e4m3','576','35,136','2.00×','122.2 万','good');
+     S.focus=['pB','pLed','pTab']; } },
+
+ { title:'MLA 的 FP4 与 DSA 的 FP8', code:'memory_pool.py:4697  MLATokenToKVPoolFP4', dur:11000,
+   cap:'MLA FP4 每层 288 + 36 B，共 <em>19,764 B</em>；DSA 模型的 fp8 把 rope <em>留成 bf16</em> 并带 scale，每层 <em>656 B</em>。',
+   act(){ view('B','fp4','fp4_mx_block16','dsa'); S.phase='cap';
+     S.ledger=`<span class="c"># FP4 (pool_configurator.py:351)</span>
+35,136 // 2 + (576 // 16) × 61 = 17,568 + 2,196
+     = <span class="y">19,764 B</span>  → 217.3 万  <span class="g">3.56×</span>
+<span class="c"># DSA fp8 (kv_cache_configurator.py:2709)</span>
+512 + 512 // 128 × 4 + 64 × 2 = <span class="y">656</span>
+656 × 61 = <span class="y">40,016 B</span> + indexer（未计入）`;
+     addRow('MLA · fp4','324','19,764','3.56×','217.3 万','good');
+     addRow('DSA · fp8（不含 indexer）','656','40,016','1.76×','107.3 万');
+     S.focus=['pB','pLed','pTab']; } },
+
+ { title:'边界①：checkpoint 没有 scale', code:'load_model_utils.py:133  load_kv_cache_scales', dur:11000,
+   cap:'没带 scale 时 k_scale 停在 -1，加载后被设成 <em>1.0</em>，只打一条 warning：数值<em>不缩放直接 cast</em>，可能掉精度。',
+   act(){ view('A','fp8','fp8_e4m3'); S.phase='write'; S.gate='noscale';
+     S.ledger=`<span class="c"># process_weights_after_loading (kv_cache.py:62)</span>
+k_scale <= 0 且 v_scale <= 0  → k_scale = v_scale = <span class="r">1.0</span>
+<span class="c"># 日志</span>
+<span class="r">Using FP8 KV cache but no scaling factors provided.</span>
+<span class="r">Defaulting to scaling factors of 1.0.</span>
+<span class="c"># 写入 k ÷ 1.0 → fp8：超出 e4m3 范围的值会失真</span>`;
+     S.focus=['pCfg','pLed']; } },
+
+ { title:'边界②：硬件与 backend 不匹配', code:'arg_groups/kv_cache_hook.py:37  handle_kv4_compatibility', dur:11000,
+   cap:'启动时就检查：mxfp8 要 <em>Blackwell</em>，nvfp4 要 <em>SM100 / SM120</em>，FP4 还限定 attention backend，不符合直接报错。',
+   act(){ view('A','fp4','nvfp4'); S.gate='hw';
+     S.ledger=`mxfp8  !is_blackwell → ValueError   <span class="c"># :25</span>
+nvfp4  !(sm100 or sm120) → RuntimeError
+<span class="c"># FP4 允许的 attention backend（assert）</span>
+MHA  triton / torch_native / flex_attention / trtllm_mha
+MLA  flashinfer / trtllm_mla
+<span class="c"># 非 CUDA 平台：KV4 is not tested → RuntimeError</span>`;
+     S.focus=['pCfg','pLed']; } },
+
+ { title:'边界③：scale buffer 的传输与初始化', code:'disaggregation/utils.py:1463  BLOCK_SCALE', dur:10500,
+   cap:'PD 分离时 KV 数据和 <em>MXFP8 scale 分两路</em>注册传输；scale 必须<em>清零初始化</em>，0xFF 在 e8m0 里是 NaN。',
+   act(){ view('A','mxfp8','mxfp8'); S.phase='alloc'; S.gate='pd';
+     S.ledger=`get_contiguous_buf_infos (:2411) → 只有 k/v_buffer
+MXFP8 scale → StateType.BLOCK_SCALE
+  ← get_kv_scale_buf_infos (memory_pool.py:3736)
+set_kv_buffer_prefix_valid → <span class="r">NotImplementedError</span>
+<span class="c"># scale buffer 用 torch.zeros (:3466)</span>
+<span class="c"># 未清零的 0xFF 在 float8_e8m0fnu 里是 NaN</span>`;
+     S.focus=['pB','pLed']; } },
+
+ { title:'', code:'', dur:12500,
+   cap:'沿着这 5 个位置打断点，对照启动日志里的 KV 大小验证你算出的每 token 字节数。',
+   act(){ S.overlay='summary'; } },
+];
+
+/* ---------------- render ---------------- */
+const $ = id => document.getElementById(id);
+const fmtB = x => x.toLocaleString('en-US');
+
+function barRow(key, label, ghost){
+  const d = DT[key]; const tot = d.segs.reduce((a,s)=>a+s[1],0);
+  const segs = d.segs.map(([n,b,c])=>{
+    const w = Math.max(2, b*PX);
+    return `<div class="seg" style="--c:${C[c]};width:${w}px">${w>40 && n ? n+' '+fmtB(b) : ''}</div>`;}).join('');
+  return `<div class="brow${ghost?' ghost':''}"><span class="bl">${label}</span><div class="bar">${segs}</div><span class="bt"><b>${fmtB(tot)}</b> B</span></div>`;
+}
+function legendHTML(m){
+  const items = m==='A'
+    ? [['K','K 数据'],['V','V 数据'],['KS','K scale'],['VS','V scale'],['WS','共享 workspace']]
+    : [['NOPE','latent nope'],['ROPE','rope'],['SC','scale']];
+  return `<div class="legend">${items.map(([c,t])=>`<span><i style="--c:${C[c]}"></i>${t}</span>`).join('')}</div>`;
+}
+function flowHTML(key){
+  const ph = S.phase;
+  const F = {
+    A_bf16:['bf16 K/V 直接写入','<code>[m,8,128]</code> bf16','kernel 直接读'],
+    A_fp8:['<code>k ÷ k_scale → fp8</code>','<code>uint8</code> 存储','view 回 fp8，kernel 乘 <code>k_descale</code>'],
+    A_mxfp8:['传入 fp8 + UE8M0 scale','fp8 数据 + e8m0 scale','FA4 MXFP8 kernel 读 scale'],
+    A_fp4:['<code>quantize_and_store</code>','fp4 + fp8 块 scale','prefill 解到 workspace / decode 原生'],
+    B_bf16:['latent 直接写入','<code>[m,1,576]</code>','MLA kernel 直接读'],
+    B_fp8:['<code>÷ k_scale → fp8</code>','<code>uint8 [m,1,576]</code>','kernel 带 scale 读'],
+    B_fp4:['量化成 fp4 + scale','<code>[m,1,288]</code> + <code>[m,36]</code>','get_key_buffer 反量化'],
+  }[key];
+  const box=(t,x,on)=>`<div class="fbox${on?' on':''}"><b>${t}</b>${x}</div>`;
+  return `<div class="flow">${box('写入 set_kv_buffer',F[0],ph==='write')}<span class="farr">→</span>${box('存储 KV pool',F[1],ph==='alloc')}<span class="farr">→</span>${box('读出 attention',F[2],ph==='read')}</div>`;
+}
+function bytesHTML(){
+  if(!S.view) return '<span class="ph">选定 dtype 后，这里画一个 token 在一层里占的字节。</span>';
+  const v = S.view, key = v.m+'_'+v.dt, d = DT[key], M = MODELS[v.m];
+  const per = d.segs.reduce((a,s)=>a+s[1],0), tot = per*M.L + d.ws;
+  let h = `<div class="mline"><b>${M.name}</b> · ${M.desc}</div>`;
+  h += `<div class="sec"><span>一层 · 一个 token（灰色 = bf16 参照）</span><span>4096 B = 420 px</span></div>`;
+  if(v.dt!=='bf16') h += barRow(v.m+'_bf16','bf16',true);
+  h += barRow(key, d.label);
+  if(v.alt) h += barRow(v.m+'_'+v.alt, DT[v.m+'_'+v.alt].label);
+  if(d.ws){
+    h += `<div class="sec"><span>每个 token 另有一份<b style="font-family:inherit">跨层共享</b>的 workspace</span><span></span></div>`;
+    h += `<div class="brow"><span class="bl">ws</span><div class="bar"><div class="seg" style="--c:${C.WS};width:${d.ws*PX}px">dq_k + dq_v ${fmtB(d.ws)}</div></div><span class="bt"><b>${fmtB(d.ws)}</b> B</span></div>`;
+  }
+  h += legendHTML(v.m);
+  h += `<div class="sec"><span>每层的 buffer（m = size + page_size）</span><span>× ${M.L} 层${d.ws?' + ws':''} = <b>${fmtB(tot)} B</b></span></div>`;
+  h += `<div class="bufs">${d.bufs}${v.alt?'\n<span class="c"># DSA：</span>'+DT[v.m+'_'+v.alt].bufs:''}</div>`;
+  h += flowHTML(key);
+  return h;
+}
+function cfgHTML(){
+  const chips = CHOICES.map(c=>`<span class="k${c===S.chip?' on':''}${c==='fp4_e2m1'?' dep':''}">${c}</span>`).join('');
+  let lines = '';
+  if(S.view){
+    const d = DT[S.view.m+'_'+S.view.dt];
+    lines = `<div class="f">torch dtype <b>${d.torch}</b>　store_dtype <b>${d.store}</b></div>
+      <div class="f">pool <b>${d.pool}</b></div>`;
+  }
+  const G = {
+    noscale:'<div class="g warn">⚠ 未提供 quantization_param_path / scale → k_scale = v_scale = 1.0</div>',
+    hw:'<div class="g warn">✖ 需 SM100/SM120，backend ∈ {triton, torch_native, flex_attention, trtllm_mha}</div>',
+    pd:'<div class="g">PD：k/v_buffer 一路，k/v_scale_buffer 作为 BLOCK_SCALE 另一路</div>',
+  };
+  const def = S.chip==='mxfp8' ? '<div class="g">门槛：Blackwell (SM100+)，head_dim 能被 32 整除</div>'
+            : (S.chip==='nvfp4'||S.chip==='fp4_mx_block16') ? '<div class="g">门槛：CUDA，nvfp4 需 SM100/SM120，限定 attention backend</div>'
+            : S.chip ? '<div class="g">门槛：fp8 需 CUDA 11.8+；CPU 不支持 fp8_e5m2</div>' : '';
+  return `<div class="chips">${chips}</div>${lines}${S.gate?G[S.gate]:def}`;
+}
+function tabHTML(){
+  if(!S.rows.length) return '<span class="ph">每看完一种 dtype，在这里记一行。</span>';
+  return `<table><tr><th>配置</th><th>每层每 token (B)</th><th>每 token (B)</th><th>相对 bf16</th><th>40 GB 可存</th></tr>${
+    S.rows.map((r,i)=>`<tr class="${i===S.curRow?'cur':''}"><td>${r.label}</td><td>${r.per}</td><td>${r.cell}</td>
+      <td class="${r.note==='good'?'good':''}">${r.rel}</td><td>${r.cap}</td></tr>`).join('')}</table>`;
+}
+
+function render(i){
+  const st = steps[i];
+  $('stitle').innerHTML = st.title ? `<span class="no">${String(i).padStart(2,'0')}</span>${st.title}` : '';
+  $('code').textContent = st.code;
+  $('cap').innerHTML = `<span>${st.cap}</span>`;
+  $('bytes').innerHTML = bytesHTML();
+  $('cfg').innerHTML = cfgHTML();
+  const l=$('led'); l.innerHTML = S.ledger || '<span class="ph">选定 dtype 后，这里按源码公式算账。</span>';
+  l.style.animation='none'; void l.offsetWidth; l.style.animation='';
+  $('tab').innerHTML = tabHTML();
+  ['pB','pCfg','pLed','pTab'].forEach(id=>$(id).classList.toggle('focus', S.focus.includes(id)));
+
+  const ov=$('ov');
+  if(S.overlay==='title'){
+    ov.innerHTML = `<h1>KV 量化</h1><h2>SGLang KV Cache 系列 12 · FP8 / MXFP8 / FP4 · 约 3 分钟</h2>`+
+      (started ? '' : `<button class="big" onclick="play()">▶ 开始演示</button>`);
+    ov.classList.remove('hide');
+  } else if(S.overlay==='summary'){
+    ov.innerHTML = `<h1 style="font-size:40px">一句话记住</h1>
+      <div class="sum"><b>--kv-cache-dtype</b> 决定 KV pool 每个元素几个 bit；<b>bit 越少，scale 越密</b><br>
+      FP8：每层一个 scale，写时除、kernel 里乘 · MXFP8：每 32 个一个 · FP4：每 16 个一个<br>
+      容量看 <b>_compute_cell_size</b>：FP4 是 bf16 的 3.46×，不是 4×</div>
+      <div class="path">1. kv_cache_dtype.py:23            configure_kv_cache_dtype  dtype 解析
+2. arg_groups/kv_cache_hook.py:37  handle_kv4_compatibility  准入检查
+3. memory_pool.py:2527             set_kv_buffer             写入量化
+4. memory_pool.py:2472             _get_key_buffer           读出 view/反量化
+5. pool_configurator.py:304        _compute_cell_size        每 token 字节</div>`;
+    ov.classList.remove('hide');
+  } else ov.classList.add('hide');
+}
+
+/* ---------------- playback ---------------- */
+let cur=0, playing=false, started=false, timer=null, voice=false;
+const bar=$('bar');
+steps.forEach((s,k)=>{ const d=document.createElement('div'); d.title=s.title||(k?'总结':'概览'); d.onclick=()=>{goto(k); if(playing) schedule();}; bar.appendChild(d); });
+const total = steps.reduce((a,s)=>a+s.dur,0);
+
+function goto(i){
+  cur=Math.max(0,Math.min(steps.length-1,i));
+  init();
+  for(let k=0;k<=cur;k++){ clearTransient(); S.overlay=null; steps[k].act(); }
+  render(cur); updateBar(); speak();
+}
+function updateBar(){
+  [...bar.children].forEach((d,k)=>{
+    d.className = k<cur?'done':(k===cur?'cur':''); d.style.setProperty('--d', steps[k].dur+'ms');
+    if(k===cur && !playing) d.classList.add('paused');
+  });
+  const el = steps.slice(0,cur).reduce((a,s)=>a+s.dur,0)/1000;
+  $('time').textContent = `${fmt(el)} / ${fmt(total/1000)}`;
+  $('bplay').textContent = playing ? '⏸' : '▶';
+}
+function fmt(s){ s=Math.round(s); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+function schedule(){ clearTimeout(timer); timer=setTimeout(advance, steps[cur].dur); }
+function advance(){
+  // 开着朗读时，等这句读完再进入下一步
+  if(voice && speechSynthesis.speaking){ timer=setTimeout(advance, 300); return; }
+  if(cur>=steps.length-1){ playing=false; updateBar(); return; }
+  goto(cur+1); schedule();
+}
+function play(){ started=true; if(cur===steps.length-1) goto(0);
+  if(cur===0) goto(1); playing=true; updateBar(); schedule(); }
+function pause(){ playing=false; clearTimeout(timer); speechSynthesis.cancel(); updateBar(); }
+function toggle(){ playing?pause():play(); }
+
+function speak(){
+  if(!voice || !('speechSynthesis' in window)) return;
+  speechSynthesis.cancel();
+  const txt = steps[cur].cap.replace(/<[^>]+>/g,'').replace(/&[a-z]+;/g,'').replace(/_/g,' ').replace(/\/\//g,'整除');
+  const u = new SpeechSynthesisUtterance(txt); u.lang='zh-CN'; u.rate=1.08;
+  const zh = speechSynthesis.getVoices().find(v=>/zh[-_]CN/i.test(v.lang)); if(zh) u.voice=zh;
+  speechSynthesis.speak(u);
+}
+
+$('bplay').onclick=toggle;
+$('bprev').onclick=()=>{ goto(cur-1); if(playing) schedule(); };
+$('bnext').onclick=()=>{ started=true; goto(cur+1); if(playing) schedule(); };
+$('bvoice').onclick=()=>{ voice=!voice; $('bvoice').textContent = voice?'🔊 朗读':'🔇 朗读'; if(voice) speak(); else speechSynthesis.cancel(); };
+document.addEventListener('keydown',e=>{
+  if(e.code==='Space'){ e.preventDefault(); toggle(); }
+  else if(e.code==='ArrowRight') $('bnext').onclick();
+  else if(e.code==='ArrowLeft') $('bprev').onclick();
+});
+
+function fit(){ const s=Math.min(innerWidth/1300, innerHeight/800); $('wrap').style.transform=`translate(-50%,-50%) scale(${s})`; }
+addEventListener('resize', fit); fit();
+goto(0);
+</script>
+</body>
+</html>
